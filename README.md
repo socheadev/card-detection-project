@@ -27,10 +27,9 @@ Open:
 - The local Node server also exposes `/proxy?url=...` and the app automatically routes
   cross-origin stream URLs through it so browser inference can read HLS segments and video
   frames.
-- For Ant Media `play.html?id=...` links, `Load Stream` displays the original remote `play.html`
-  page directly.
-- `Start Detect` keeps that original display visible and loads the matching HLS stream underneath
-  it for inference, probing `streams/<id>_adaptive.m3u8` first and preserving non-player query
+- For Ant Media `play.html?id=...` links, the app auto-loads the source on startup and keeps the
+  original remote `play.html` display visible while loading the matching HLS stream underneath it
+  for inference, probing `streams/<id>_adaptive.m3u8` first and preserving non-player query
   params such as stream security tokens before falling back to `streams/<id>.m3u8`.
 - HLS playlists are rewritten by the proxy so nested playlists, segment URLs, and key URLs
   continue loading through the same origin.

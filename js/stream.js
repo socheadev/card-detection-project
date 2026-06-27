@@ -537,25 +537,6 @@ export async function loadStreamFromInput() {
   }
 
   if (isPlayHtmlSource(rawSource)) {
-    return loadEmbeddedPlayHtml(rawSource);
-  }
-
-  const resolvedSource = await resolvePlayableSource(rawSource, {
-    mirrorPlayHtmlHlsLookup: false,
-  });
-
-  return loadVideoSource(resolvedSource, rawSource);
-}
-
-export async function loadDetectionStreamFromInput() {
-  const rawSource = els.sourceInput?.value?.trim() || "";
-
-  if (!rawSource) {
-    emitStatusChanged("Enter a stream URL first");
-    return false;
-  }
-
-  if (isPlayHtmlSource(rawSource)) {
     return loadHybridPlayHtmlSource(rawSource, rawSource);
   }
 
@@ -564,20 +545,4 @@ export async function loadDetectionStreamFromInput() {
   });
 
   return loadVideoSource(resolvedSource, rawSource);
-}
-
-export function openVideoFilePicker() {
-  els.videoFileInput?.click();
-}
-
-export async function loadVideoFile(file) {
-  if (!file) {
-    return false;
-  }
-
-  clearStream();
-
-  appState.fileObjectUrl = URL.createObjectURL(file);
-
-  return loadVideoSource(appState.fileObjectUrl, file.name);
 }

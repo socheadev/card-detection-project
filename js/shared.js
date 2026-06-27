@@ -224,7 +224,6 @@ export let ROI_SLOT_CONFIG =
 export const els = {
   sourceInput: document.querySelector("#sourceInput"),
   loadStreamBtn: document.querySelector("#loadStreamBtn"),
-  openVideoBtn: document.querySelector("#openVideoBtn"),
   startDetectBtn: document.querySelector("#startDetectBtn"),
   stopDetectBtn: document.querySelector("#stopDetectBtn"),
   toggleRoiEditorBtn: document.querySelector("#toggleRoiEditorBtn"),
@@ -247,7 +246,6 @@ export const els = {
   bestScoreValue: document.querySelector("#bestScoreValue"),
   copyRawModelBtn: document.querySelector("#copyRawModelBtn"),
   rawModelOutput: document.querySelector("#rawModelOutput"),
-  videoFileInput: document.querySelector("#videoFileInput"),
   roiFileInput: document.querySelector("#roiFileInput"),
 };
 
@@ -298,6 +296,7 @@ export const appState = {
   modelInputSize: 0,
   streamMode: "video",
   streamReady: false,
+  preparingDetection: false,
   detecting: false,
   startingDetection: false,
   detectionSessionId: 0,
@@ -305,7 +304,7 @@ export const appState = {
   animationFrameId: 0,
   lastRunAt: 0,
   hideCardsUntilClear: false,
-  roiEditorEnabled: true,
+  roiEditorEnabled: false,
   roiInputsCollapsed: true,
 };
 

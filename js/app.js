@@ -26,16 +26,14 @@ import {
 } from "./render.js";
 import { initRoiEditor, renderRoiEditor } from "./roi-editor.js";
 import {
-  loadDetectionStreamFromInput,
   loadStreamFromInput,
-  loadVideoFile,
-  openVideoFilePicker,
 } from "./stream.js";
 
 const COPY_BUTTON_RESET_MS = 1400;
 
 let copyButtonResetTimer = 0;
 let resizeObserver = null;
+let detectRequestId = 0;
 
 function setElementState(element, stateName) {
   if (element) {
@@ -76,20 +74,17 @@ async function reload(loadFn, value) {
 
 function syncDetectionControls() {
   if (els.startDetectBtn) {
-    els.startDetectBtn.disabled = appState.detecting || appState.startingDetection;
+    els.startDetectBtn.disabled =
+      appState.preparingDetection || appState.detecting || appState.startingDetection;
   }
 
   if (els.stopDetectBtn) {
-    els.stopDetectBtn.disabled = !appState.detecting && !appState.startingDetection;
+    els.stopDetectBtn.disabled =
+      !appState.preparingDetection && !appState.detecting && !appState.startingDetection;
   }
 }
 
 async function ensureStreamReadyForDetection() {
-  if (appState.streamMode === "iframe") {
-    emitStatusChanged("Switching play.html display to HLS for detection...");
-    return reload(loadDetectionStreamFromInput);
-  }
-
   if (appState.streamReady) {
     return true;
   }
@@ -100,7 +95,7 @@ async function ensureStreamReadyForDetection() {
   }
 
   emitStatusChanged("Loading stream before detection...");
-  return reload(loadDetectionStreamFromInput);
+  return reload(loadStreamFromInput);
 }
 
 async function writeTextToClipboard(text) {
@@ -174,28 +169,44 @@ function bindEvents() {
     reload(loadStreamFromInput);
   });
 
-  els.openVideoBtn?.addEventListener("click", openVideoFilePicker);
   els.startDetectBtn?.addEventListener("click", async () => {
-    const streamReady = await ensureStreamReadyForDetection();
-
-    if (!streamReady) {
+    if (appState.preparingDetection || appState.detecting || appState.startingDetection) {
       syncDetectionControls();
       return;
     }
 
-    await startDetection();
+    const requestId = ++detectRequestId;
+    appState.preparingDetection = true;
     syncDetectionControls();
+
+    try {
+      const streamReady = await ensureStreamReadyForDetection();
+
+      if (requestId !== detectRequestId || !appState.preparingDetection) {
+        return;
+      }
+
+      if (!streamReady) {
+        return;
+      }
+
+      appState.preparingDetection = false;
+      await startDetection();
+    } finally {
+      if (requestId === detectRequestId) {
+        appState.preparingDetection = false;
+      }
+      syncDetectionControls();
+    }
   });
   els.stopDetectBtn?.addEventListener("click", () => {
+    detectRequestId += 1;
+    appState.preparingDetection = false;
     stopDetection();
     emitStatusChanged("Detection stopped");
     syncDetectionControls();
   });
   els.copyRawModelBtn?.addEventListener("click", copyRawModelOutput);
-
-  els.videoFileInput?.addEventListener("change", (event) => {
-    reload(loadVideoFile, event.target.files?.[0] || null);
-  });
 
   els.sourceInput?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {

@@ -71,32 +71,11 @@ function formatDetection(detection) {
 }
 
 function formatRawModelOutput(runtimeView) {
-  if (!runtimeView.displayedDetections.length) {
+  if (!runtimeView.rawModelOutput) {
     return "";
   }
 
-  const grouped = groupDetectionsBySide(
-    runtimeView.displayedDetections.filter(
-      (detection) => normalizedCardLabel(detection.label),
-    ),
-  );
-
-  return JSON.stringify(
-    {
-      PLAYER: (grouped.PLAYER || []).map((detection) => ({
-        label: normalizedCardLabel(detection.label),
-        classId: detection.classId,
-        score: roundNumber(detection.score, 5),
-      })),
-      BANKER: (grouped.BANKER || []).map((detection) => ({
-        label: normalizedCardLabel(detection.label),
-        classId: detection.classId,
-        score: roundNumber(detection.score, 5),
-      })),
-    },
-    null,
-    2,
-  );
+  return JSON.stringify(runtimeView.rawModelOutput, null, 2);
 }
 
 function drawRawDetectionBoxes(frameRect) {
