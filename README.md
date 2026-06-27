@@ -27,6 +27,10 @@ Open:
 - The local Node server also exposes `/proxy?url=...` and the app automatically routes
   cross-origin stream URLs through it so browser inference can read HLS segments and video
   frames.
+- For Ant Media `play.html?id=...` links, the default behavior still resolves straight to
+  `streams/<id>.m3u8`. If you enable `Mirror play.html HLS lookup` in the UI, the app first
+  probes `streams/<id>_adaptive.m3u8` and preserves non-player query params such as stream
+  security tokens before falling back to `streams/<id>.m3u8`.
 - HLS playlists are rewritten by the proxy so nested playlists, segment URLs, and key URLs
   continue loading through the same origin.
 - Direct folder serving with a plain static server still works for local files and for remote

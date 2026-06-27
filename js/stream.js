@@ -8,6 +8,15 @@ import {
 } from "./shared.js";
 
 const VIDEO_READY_TIMEOUT_MS = 15000;
+const PLAY_HTML_PLAYER_ONLY_PARAMS = new Set([
+  "autoplay",
+  "id",
+  "is360",
+  "mute",
+  "playOrder",
+  "playType",
+  "targetLatency",
+]);
 
 function isHttpSource(source) {
   try {
@@ -47,36 +56,59 @@ function toBrowserPlayableSource(source) {
   return proxyUrl.toString();
 }
 
-export function resolvePlayableSource(source) {
-  const cleanSource = source?.trim();
-
-  if (!cleanSource) {
-    return "";
-  }
-
+function isPlayHtmlSource(source) {
   try {
-    const url = new URL(cleanSource);
-
-    if (url.pathname.toLowerCase().endsWith(".m3u8")) {
-      return cleanSource;
-    }
-
-    if (url.pathname.toLowerCase().endsWith("/play.html")) {
-      const streamId = url.searchParams.get("id");
-
-      if (!streamId) {
-        throw new Error("The play.html URL is missing ?id=...");
-      }
-
-      const basePath = url.pathname.split("/").slice(0, -1).join("/");
-
-      return `${url.protocol}//${url.host}${basePath}/streams/${streamId}.m3u8`;
-    }
-
-    return cleanSource;
+    const url = new URL(source);
+    return url.pathname.toLowerCase().endsWith("/play.html");
   } catch {
-    return cleanSource;
+    return false;
   }
+}
+
+function buildPlayHtmlStreamQuery(url) {
+  const streamQuery = new URLSearchParams();
+
+  for (const [key, value] of url.searchParams.entries()) {
+    if (!PLAY_HTML_PLAYER_ONLY_PARAMS.has(key)) {
+      streamQuery.append(key, value);
+    }
+  }
+
+  const query = streamQuery.toString();
+  return query ? `?${query}` : "";
+}
+
+function buildPlayHtmlStreamSource(url, streamId, suffix = "") {
+  const basePath = url.pathname.split("/").slice(0, -1).join("/");
+  const query = buildPlayHtmlStreamQuery(url);
+
+  return `${url.protocol}//${url.host}${basePath}/streams/${streamId}${suffix}.m3u8${query}`;
+}
+
+async function sourceExists(source) {
+  try {
+    const response = await fetch(toBrowserPlayableSource(source), { method: "HEAD" });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function resolvePlayHtmlHlsSource(source) {
+  const url = new URL(source);
+  const streamId = url.searchParams.get("id");
+
+  if (!streamId) {
+    throw new Error("The play.html URL is missing ?id=...");
+  }
+
+  const adaptiveSource = buildPlayHtmlStreamSource(url, streamId, "_adaptive");
+
+  if (await sourceExists(adaptiveSource)) {
+    return adaptiveSource;
+  }
+
+  return buildPlayHtmlStreamSource(url, streamId);
 }
 
 function sourcePathname(source) {
@@ -303,6 +335,40 @@ export async function loadVideoSource(source, sourceLabel = source) {
   }
 }
 
+export async function resolvePlayableSource(source, { mirrorPlayHtmlHlsLookup = false } = {}) {
+  const cleanSource = source?.trim();
+
+  if (!cleanSource) {
+    return "";
+  }
+
+  if (mirrorPlayHtmlHlsLookup && isPlayHtmlSource(cleanSource)) {
+    return resolvePlayHtmlHlsSource(cleanSource);
+  }
+
+  try {
+    const url = new URL(cleanSource);
+
+    if (url.pathname.toLowerCase().endsWith(".m3u8")) {
+      return cleanSource;
+    }
+
+    if (url.pathname.toLowerCase().endsWith("/play.html")) {
+      const streamId = url.searchParams.get("id");
+
+      if (!streamId) {
+        throw new Error("The play.html URL is missing ?id=...");
+      }
+
+      return buildPlayHtmlStreamSource(url, streamId);
+    }
+
+    return cleanSource;
+  } catch {
+    return cleanSource;
+  }
+}
+
 export async function loadStreamFromInput() {
   const rawSource = els.sourceInput?.value?.trim() || "";
 
@@ -311,7 +377,9 @@ export async function loadStreamFromInput() {
     return false;
   }
 
-  const resolvedSource = resolvePlayableSource(rawSource);
+  const resolvedSource = await resolvePlayableSource(rawSource, {
+    mirrorPlayHtmlHlsLookup: !!els.preservePlayHtmlInput?.checked,
+  });
 
   return loadVideoSource(resolvedSource, rawSource);
 }
