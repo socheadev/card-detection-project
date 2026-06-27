@@ -298,6 +298,7 @@ export const appState = {
   inferenceBusy: false,
   animationFrameId: 0,
   lastRunAt: 0,
+  hideCardsUntilClear: false,
   roiEditorEnabled: false,
   roiInputsCollapsed: true,
 };

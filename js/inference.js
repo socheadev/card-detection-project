@@ -150,9 +150,17 @@ function clearDisplayedCardsState() {
 function nextDisplayedCards(frameDetections) {
   if (!frameDetections.length) {
     clearDisplayedCardsState();
+    appState.hideCardsUntilClear = false;
     return {
       displayedDetections: [],
       resetTriggered: true,
+    };
+  }
+
+  if (appState.hideCardsUntilClear) {
+    return {
+      displayedDetections: [],
+      resetTriggered: false,
     };
   }
 
@@ -166,6 +174,7 @@ function nextDisplayedCards(frameDetections) {
 
   if (frameDetections.length < displayedCardsState.length) {
     clearDisplayedCardsState();
+    appState.hideCardsUntilClear = true;
     return {
       displayedDetections: [],
       resetTriggered: true,
@@ -272,6 +281,7 @@ export function stopDetection() {
   appState.detecting = false;
   appState.inferenceBusy = false;
   appState.lastRunAt = 0;
+  appState.hideCardsUntilClear = false;
   clearDisplayedCardsState();
 
   if (appState.animationFrameId) {
