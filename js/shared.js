@@ -13,7 +13,7 @@ export const MODEL_BADGE_ERROR_TEXT = "Error";
 
 export const STATUS_WAITING_FOR_STREAM_TEXT = "Waiting for a stream";
 export const TIMING_IDLE_TEXT = "No inference yet";
-export const RAW_MODEL_OUTPUT_IDLE_TEXT = "No raw model output yet";
+export const RAW_MODEL_OUTPUT_IDLE_TEXT = "";
 export const COPY_BUTTON_IDLE_TEXT = "Copy Data";
 
 export const MODEL_URL = new URL("../model/best.onnx", import.meta.url).toString();
@@ -223,7 +223,6 @@ export let ROI_SLOT_CONFIG =
 
 export const els = {
   sourceInput: document.querySelector("#sourceInput"),
-  preservePlayHtmlInput: document.querySelector("#preservePlayHtmlInput"),
   loadStreamBtn: document.querySelector("#loadStreamBtn"),
   openVideoBtn: document.querySelector("#openVideoBtn"),
   startDetectBtn: document.querySelector("#startDetectBtn"),
@@ -237,6 +236,7 @@ export const els = {
   iouInput: document.querySelector("#iouInput"),
   intervalInput: document.querySelector("#intervalInput"),
   video: document.querySelector("#video"),
+  remoteFrame: document.querySelector("#remoteFrame"),
   overlay: document.querySelector("#overlay"),
   roiEditorOverlay: document.querySelector("#roiEditorOverlay"),
   cardsOverlay: document.querySelector("#cardsOverlay"),
@@ -296,14 +296,16 @@ export const appState = {
   modelLoadPromise: null,
   modelLabels: [],
   modelInputSize: 0,
+  streamMode: "video",
   streamReady: false,
   detecting: false,
   startingDetection: false,
+  detectionSessionId: 0,
   inferenceBusy: false,
   animationFrameId: 0,
   lastRunAt: 0,
   hideCardsUntilClear: false,
-  roiEditorEnabled: false,
+  roiEditorEnabled: true,
   roiInputsCollapsed: true,
 };
 

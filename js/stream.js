@@ -130,11 +130,48 @@ function destroyHls() {
   }
 }
 
+function setViewerMode(mode) {
+  appState.streamMode = mode;
+
+  if (els.video) {
+    els.video.hidden = mode === "iframe";
+    els.video.style.opacity = mode === "hybrid" ? "0" : "1";
+    els.video.style.pointerEvents = "none";
+  }
+
+  if (els.remoteFrame) {
+    els.remoteFrame.hidden = mode === "video";
+  }
+
+  const overlaysHidden = mode === "iframe";
+
+  if (els.overlay) {
+    els.overlay.hidden = overlaysHidden;
+  }
+
+  if (els.roiEditorOverlay) {
+    els.roiEditorOverlay.hidden = overlaysHidden;
+  }
+
+  if (els.cardsOverlay) {
+    els.cardsOverlay.hidden = overlaysHidden;
+  }
+}
+
 function revokeFileObjectUrl() {
   if (appState.fileObjectUrl) {
     URL.revokeObjectURL(appState.fileObjectUrl);
     appState.fileObjectUrl = "";
   }
+}
+
+function resetRemoteFrame() {
+  if (!els.remoteFrame) {
+    return;
+  }
+
+  els.remoteFrame.removeAttribute("src");
+  els.remoteFrame.src = "about:blank";
 }
 
 function resetVideoElement() {
@@ -151,8 +188,11 @@ export function clearStream() {
   destroyHls();
   revokeFileObjectUrl();
 
+  appState.streamMode = "video";
   appState.streamReady = false;
 
+  setViewerMode("video");
+  resetRemoteFrame();
   resetVideoElement();
   resetRuntimeView();
 
@@ -286,6 +326,125 @@ async function playVideoIfPossible(sourceLabel) {
   }
 }
 
+function waitForFrameLoad(frame, source) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const cleanup = () => {
+      frame.removeEventListener("load", handleLoad);
+      frame.removeEventListener("error", handleError);
+      window.clearTimeout(timeoutId);
+    };
+
+    const finish = (callback) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanup();
+      callback();
+    };
+
+    const handleLoad = () => {
+      finish(resolve);
+    };
+
+    const handleError = () => {
+      finish(() => {
+        reject(new Error("The browser could not load the remote player page"));
+      });
+    };
+
+    const timeoutId = window.setTimeout(() => {
+      finish(() => {
+        reject(new Error("Timed out while waiting for the remote player page"));
+      });
+    }, VIDEO_READY_TIMEOUT_MS);
+
+    frame.addEventListener("load", handleLoad, { once: true });
+    frame.addEventListener("error", handleError, { once: true });
+    frame.src = source;
+  });
+}
+
+async function loadEmbeddedPlayHtml(source) {
+  if (!els.remoteFrame) {
+    emitStatusChanged("Direct play.html display is not available in this build.");
+    return false;
+  }
+
+  clearStream();
+  setViewerMode("iframe");
+
+  try {
+    await waitForFrameLoad(els.remoteFrame, source);
+    emitStatusChanged(
+      "Loaded remote play.html directly. Detection is unavailable in iframe mode.",
+    );
+    emitRuntimeViewChanged();
+    return true;
+  } catch (error) {
+    clearStream();
+    emitStatusChanged(`Could not load remote player: ${error.message}`);
+    return false;
+  }
+}
+
+async function loadHybridPlayHtmlSource(source, sourceLabel = source) {
+  if (!els.remoteFrame) {
+    emitStatusChanged("Direct play.html display is not available in this build.");
+    return false;
+  }
+
+  const resolvedSource = await resolvePlayableSource(source, {
+    mirrorPlayHtmlHlsLookup: true,
+  });
+
+  clearStream();
+  setViewerMode("hybrid");
+
+  els.video.crossOrigin = "anonymous";
+  els.video.muted = true;
+  els.video.playsInline = true;
+
+  emitStatusChanged(`Loading stream for detection: ${sourceLabel}`);
+
+  const playableSource = toBrowserPlayableSource(resolvedSource);
+  const frameLoadPromise = waitForFrameLoad(els.remoteFrame, source);
+
+  if (isHlsSource(resolvedSource)) {
+    const attachedByHlsJs = attachHlsSource(playableSource);
+
+    if (!attachedByHlsJs) {
+      if (canPlayNativeHls()) {
+        attachNativeVideoSource(playableSource);
+      } else {
+        emitStatusChanged(
+          "This browser cannot play HLS here. Use Safari or a Chromium browser with hls.js support.",
+        );
+        return false;
+      }
+    }
+  } else {
+    attachNativeVideoSource(playableSource);
+  }
+
+  try {
+    await Promise.all([waitForVideoReady(els.video), frameLoadPromise]);
+    appState.streamReady = true;
+    emitOverlayInvalidated();
+    emitRuntimeViewChanged();
+    await playVideoIfPossible(sourceLabel);
+    emitStatusChanged(`Loaded original play.html with detection overlay: ${sourceLabel}`);
+    return true;
+  } catch (error) {
+    clearStream();
+    emitStatusChanged(`Could not load stream: ${error.message}`);
+    return false;
+  }
+}
+
 export async function loadVideoSource(source, sourceLabel = source) {
   const cleanSource = source?.trim?.() || source;
 
@@ -377,8 +536,31 @@ export async function loadStreamFromInput() {
     return false;
   }
 
+  if (isPlayHtmlSource(rawSource)) {
+    return loadEmbeddedPlayHtml(rawSource);
+  }
+
   const resolvedSource = await resolvePlayableSource(rawSource, {
-    mirrorPlayHtmlHlsLookup: !!els.preservePlayHtmlInput?.checked,
+    mirrorPlayHtmlHlsLookup: false,
+  });
+
+  return loadVideoSource(resolvedSource, rawSource);
+}
+
+export async function loadDetectionStreamFromInput() {
+  const rawSource = els.sourceInput?.value?.trim() || "";
+
+  if (!rawSource) {
+    emitStatusChanged("Enter a stream URL first");
+    return false;
+  }
+
+  if (isPlayHtmlSource(rawSource)) {
+    return loadHybridPlayHtmlSource(rawSource, rawSource);
+  }
+
+  const resolvedSource = await resolvePlayableSource(rawSource, {
+    mirrorPlayHtmlHlsLookup: isPlayHtmlSource(rawSource),
   });
 
   return loadVideoSource(resolvedSource, rawSource);

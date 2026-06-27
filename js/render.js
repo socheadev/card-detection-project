@@ -1,5 +1,4 @@
 import {
-  CARD_REVEAL_SCORE,
   cardAssetUrl,
   cardsOverlayKey,
   els,
@@ -36,6 +35,16 @@ function roundNumber(value, digits = 4) {
   return Number.isFinite(value) ? Number(value.toFixed(digits)) : value;
 }
 
+function normalizedCardLabel(value) {
+  const label = String(value ?? "").trim();
+
+  if (!label || label === "null" || label === "undefined") {
+    return "";
+  }
+
+  return label;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -63,20 +72,24 @@ function formatDetection(detection) {
 
 function formatRawModelOutput(runtimeView) {
   if (!runtimeView.displayedDetections.length) {
-    return "No raw model output yet";
+    return "";
   }
 
-  const grouped = groupDetectionsBySide(runtimeView.displayedDetections);
+  const grouped = groupDetectionsBySide(
+    runtimeView.displayedDetections.filter(
+      (detection) => normalizedCardLabel(detection.label),
+    ),
+  );
 
   return JSON.stringify(
     {
       PLAYER: (grouped.PLAYER || []).map((detection) => ({
-        label: detection.label,
+        label: normalizedCardLabel(detection.label),
         classId: detection.classId,
         score: roundNumber(detection.score, 5),
       })),
       BANKER: (grouped.BANKER || []).map((detection) => ({
-        label: detection.label,
+        label: normalizedCardLabel(detection.label),
         classId: detection.classId,
         score: roundNumber(detection.score, 5),
       })),
@@ -235,22 +248,22 @@ export function renderRawModelOutput(runtimeView) {
 function renderCardsMarkup(detections) {
   return detections
     .map((detection, index) => {
-      const label = escapeHtml(detection.label);
+      const rawLabel = normalizedCardLabel(detection.label);
+
+      if (!rawLabel) {
+        return "";
+      }
+
+      const label = escapeHtml(rawLabel);
       const scorePercent = Math.round((detection.score || 0) * 100);
-      const revealed = (detection.score || 0) >= CARD_REVEAL_SCORE;
-      const title = revealed
-        ? `${label} (${scorePercent}%)`
-        : `${label} detected at ${scorePercent}%. Showing default card until ${Math.round(CARD_REVEAL_SCORE * 100)}%.`;
-      const imageMarkup = revealed
-        ? `<img class="cards-hand-image" src="${escapeHtml(cardAssetUrl(detection.label))}" alt="${label}" />`
-        : `<div class="cards-hand-image cards-hand-image-placeholder" aria-label="Awaiting confident card detection">?</div>`;
-      const state = revealed ? "stable" : "unstable";
+      const title = `${label} (${scorePercent}%)`;
+      const imageMarkup = `<img class="cards-hand-image" src="${escapeHtml(cardAssetUrl(rawLabel))}" alt="${label}" />`;
 
       return `
-        <figure class="cards-hand-card" data-card-index="${index}" data-state="${state}" title="${escapeHtml(title)}">
+        <figure class="cards-hand-card" data-card-index="${index}" data-state="stable" title="${escapeHtml(title)}">
           ${imageMarkup}
           <figcaption class="cards-hand-score">
-            ${revealed ? label : `Default (${scorePercent}%)`}
+            ${label}
           </figcaption>
         </figure>
       `;
@@ -263,7 +276,11 @@ export function renderCardsOverlay(displayedDetections) {
     return;
   }
 
-  if (!displayedDetections.length) {
+  const validDetections = displayedDetections.filter(
+    (detection) => normalizedCardLabel(detection.label),
+  );
+
+  if (!validDetections.length) {
     if (cardsMarkupKey) {
       els.cardsOverlay.innerHTML = "";
       cardsMarkupKey = "";
@@ -272,7 +289,7 @@ export function renderCardsOverlay(displayedDetections) {
     return;
   }
 
-  const grouped = groupDetectionsBySide(displayedDetections);
+  const grouped = groupDetectionsBySide(validDetections);
   const nextKey = cardsOverlayKey(grouped);
 
   if (cardsMarkupKey !== nextKey) {

@@ -26,6 +26,15 @@
                 crossorigin="anonymous" >
               </video>
 
+              <iframe
+                id="remoteFrame"
+                class="remote-frame"
+                title="Remote stream player"
+                allow="autoplay; fullscreen"
+                loading="eager"
+                hidden
+              ></iframe>
+
               <canvas id="overlay"></canvas>
 
               <div
@@ -58,11 +67,6 @@
                       spellcheck="false"
                       placeholder="Paste play.html?id=..., .m3u8, MP4..."
                     />
-                  </label>
-
-                  <label class="play-html-option">
-                    <input id="preservePlayHtmlInput" type="checkbox" />
-                    <span>Mirror play.html HLS lookup</span>
                   </label>
 
                   <div class="action-row">
@@ -204,10 +208,7 @@
                     </button>
                   </div>
 
-                  <pre id="rawModelOutput" class="raw-model-output">
-No raw output
-              </pre
-                  >
+                  <pre id="rawModelOutput" class="raw-model-output"></pre>
                 </div>
               </div>
             </div>

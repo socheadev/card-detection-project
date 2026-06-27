@@ -26,6 +26,7 @@ import {
 } from "./render.js";
 import { initRoiEditor, renderRoiEditor } from "./roi-editor.js";
 import {
+  loadDetectionStreamFromInput,
   loadStreamFromInput,
   loadVideoFile,
   openVideoFilePicker,
@@ -84,6 +85,11 @@ function syncDetectionControls() {
 }
 
 async function ensureStreamReadyForDetection() {
+  if (appState.streamMode === "iframe") {
+    emitStatusChanged("Switching play.html display to HLS for detection...");
+    return reload(loadDetectionStreamFromInput);
+  }
+
   if (appState.streamReady) {
     return true;
   }
@@ -94,7 +100,7 @@ async function ensureStreamReadyForDetection() {
   }
 
   emitStatusChanged("Loading stream before detection...");
-  return reload(loadStreamFromInput);
+  return reload(loadDetectionStreamFromInput);
 }
 
 async function writeTextToClipboard(text) {
@@ -199,6 +205,9 @@ function bindEvents() {
   });
 
   els.video?.addEventListener("loadedmetadata", redrawStage);
+  els.video?.addEventListener("loadeddata", redrawStage);
+  els.video?.addEventListener("canplay", redrawStage);
+  els.video?.addEventListener("playing", redrawStage);
   window.addEventListener("resize", redrawStage);
 
   if (window.ResizeObserver && els.video) {
@@ -210,6 +219,7 @@ function bindEvents() {
 function bindPreviewEvents() {
   onPreviewEvent(PREVIEW_EVENTS.runtimeViewChanged, () => {
     renderDetectionUi();
+    redrawStage();
     syncDetectionControls();
   });
   onPreviewEvent(PREVIEW_EVENTS.overlayInvalidated, drawOverlay);

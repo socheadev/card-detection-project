@@ -157,30 +157,6 @@ function nextDisplayedCards(frameDetections) {
     };
   }
 
-  if (appState.hideCardsUntilClear) {
-    return {
-      displayedDetections: [],
-      resetTriggered: false,
-    };
-  }
-
-  if (!displayedCardsState.length) {
-    displayedCardsState = frameDetections;
-    return {
-      displayedDetections: displayedCardsState,
-      resetTriggered: false,
-    };
-  }
-
-  if (frameDetections.length < displayedCardsState.length) {
-    clearDisplayedCardsState();
-    appState.hideCardsUntilClear = true;
-    return {
-      displayedDetections: [],
-      resetTriggered: true,
-    };
-  }
-
   displayedCardsState = frameDetections;
   return {
     displayedDetections: displayedCardsState,
@@ -206,8 +182,8 @@ async function captureFrameBitmap() {
   }
 }
 
-async function runInferenceFrame() {
-  if (!appState.streamReady) {
+async function runInferenceFrame(sessionId = appState.detectionSessionId) {
+  if (!appState.streamReady || appState.detectionSessionId !== sessionId) {
     throw new Error("Load a stream before starting detection");
   }
 
@@ -225,6 +201,10 @@ async function runInferenceFrame() {
   const roiBounds = roiBoundsByName(sourceWidth, sourceHeight);
   const frameBitmap = await captureFrameBitmap();
   const frameResult = await runModelInference(frameBitmap, thresholds);
+
+  if (appState.detectionSessionId !== sessionId) {
+    return false;
+  }
 
   const { matchedDetections, unmatchedDetections } = assignDetectionsToRois(
     frameResult.detections,
@@ -278,6 +258,7 @@ async function runInferenceFrame() {
 }
 
 export function stopDetection() {
+  appState.detectionSessionId += 1;
   appState.detecting = false;
   appState.startingDetection = false;
   appState.inferenceBusy = false;
@@ -294,8 +275,8 @@ export function stopDetection() {
   emitRuntimeViewChanged();
 }
 
-async function detectionLoop() {
-  if (!appState.detecting) {
+async function detectionLoop(sessionId = appState.detectionSessionId) {
+  if (!appState.detecting || appState.detectionSessionId !== sessionId) {
     return;
   }
 
@@ -306,39 +287,48 @@ async function detectionLoop() {
     els.video.paused ||
     els.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
   ) {
-    appState.animationFrameId = requestAnimationFrame(detectionLoop);
+    appState.animationFrameId = requestAnimationFrame(() => detectionLoop(sessionId));
     return;
   }
 
   if (performance.now() - appState.lastRunAt < intervalMs) {
-    appState.animationFrameId = requestAnimationFrame(detectionLoop);
+    appState.animationFrameId = requestAnimationFrame(() => detectionLoop(sessionId));
     return;
   }
 
   appState.inferenceBusy = true;
 
   try {
-    const updated = await runInferenceFrame();
+    const updated = await runInferenceFrame(sessionId);
 
-    if (updated !== false && appState.detecting) {
+    if (
+      updated !== false &&
+      appState.detecting &&
+      appState.detectionSessionId === sessionId
+    ) {
       emitStatusChanged("Detection loop running");
     }
   } catch (error) {
-    stopDetection();
-    emitStatusChanged(`Detection stopped: ${error.message}`);
+    if (appState.detectionSessionId === sessionId) {
+      stopDetection();
+      emitStatusChanged(`Detection stopped: ${error.message}`);
+    }
   } finally {
-    appState.inferenceBusy = false;
+    if (appState.detectionSessionId === sessionId) {
+      appState.inferenceBusy = false;
+    }
   }
 
-  if (appState.detecting) {
-    appState.animationFrameId = requestAnimationFrame(detectionLoop);
+  if (appState.detecting && appState.detectionSessionId === sessionId) {
+    appState.animationFrameId = requestAnimationFrame(() => detectionLoop(sessionId));
   }
 }
 
 export async function startDetection() {
   if (appState.detecting || appState.startingDetection) {
     if (!appState.animationFrameId) {
-      appState.animationFrameId = requestAnimationFrame(detectionLoop);
+      const sessionId = appState.detectionSessionId;
+      appState.animationFrameId = requestAnimationFrame(() => detectionLoop(sessionId));
     }
 
     return;
@@ -350,6 +340,8 @@ export async function startDetection() {
   }
 
   try {
+    const sessionId = appState.detectionSessionId + 1;
+    appState.detectionSessionId = sessionId;
     appState.startingDetection = true;
     emitStatusChanged("Starting detection...");
 
@@ -359,12 +351,19 @@ export async function startDetection() {
 
     await loadModel();
 
+    if (appState.detectionSessionId !== sessionId) {
+      return;
+    }
+
     appState.startingDetection = false;
     appState.detecting = true;
+    appState.inferenceBusy = false;
     emitStatusChanged("Starting detection loop");
-    appState.animationFrameId = requestAnimationFrame(detectionLoop);
+    appState.animationFrameId = requestAnimationFrame(() => detectionLoop(sessionId));
   } catch (error) {
-    stopDetection();
-    emitStatusChanged(`Could not start detection: ${error.message}`);
+    if (appState.startingDetection) {
+      stopDetection();
+      emitStatusChanged(`Could not start detection: ${error.message}`);
+    }
   }
 }
