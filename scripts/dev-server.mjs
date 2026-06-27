@@ -16,6 +16,7 @@ const MIME_TYPES = new Map([
   [".css", "text/css; charset=utf-8"],
   [".html", "text/html; charset=utf-8"],
   [".js", "text/javascript; charset=utf-8"],
+  [".mjs", "text/javascript; charset=utf-8"],
   [".json", "application/json; charset=utf-8"],
   [".m3u8", "application/vnd.apple.mpegurl; charset=utf-8"],
   [".mp4", "video/mp4"],

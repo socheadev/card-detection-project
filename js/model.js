@@ -158,6 +158,8 @@ export async function loadModel() {
 
       return result;
     } catch (error) {
+      // A failed ORT/WASM init poisons the worker runtime. Recreate it on retry.
+      disposeWorker();
       resetModelState();
 
       emitModelPresentationChanged({

@@ -17,6 +17,16 @@ const workerState = {
   ortLoadPromise: null,
 };
 
+function wasmThreadCount() {
+  const hardwareConcurrency = self.navigator?.hardwareConcurrency || 1;
+
+  if (!self.crossOriginIsolated) {
+    return 1;
+  }
+
+  return Math.max(1, Math.min(4, hardwareConcurrency));
+}
+
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
@@ -267,10 +277,7 @@ async function loadModel(payload = {}) {
   }
 
   const ort = await ensureOrtLoaded();
-  ort.env.wasm.numThreads = Math.max(
-    1,
-    Math.min(4, self.navigator?.hardwareConcurrency || 1),
-  );
+  ort.env.wasm.numThreads = wasmThreadCount();
   ort.env.wasm.wasmPaths = ORT_WASM_BASE_URL;
 
   const modelBytes = await fetchModelBytes(

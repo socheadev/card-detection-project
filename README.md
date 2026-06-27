@@ -10,8 +10,8 @@ npm install
 npm run serve
 ```
 
-This installs `hls.js` and `onnxruntime-web` locally and copies the browser runtime files
-into `vendor/`, then starts a local server with a built-in stream proxy.
+This installs `hls.js` and `onnxruntime-web` locally, copies the browser runtime files
+into `vendor/`, and starts the local server the app expects.
 
 ## Run
 
@@ -21,6 +21,9 @@ Open:
 
 ## Notes
 
+- Use `npm run serve` for local development. Plain static servers such as Python
+  `http.server` or misconfigured Live Server setups can serve ONNX `.mjs` runtime files
+  with the wrong MIME type and cause `initWasm()` backend startup failures.
 - The local Node server also exposes `/proxy?url=...` and the app automatically routes
   cross-origin stream URLs through it so browser inference can read HLS segments and video
   frames.
