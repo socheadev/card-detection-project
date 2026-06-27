@@ -1,4 +1,5 @@
 import {
+  CARD_REVEAL_SCORE,
   cardAssetUrl,
   cardsOverlayKey,
   els,
@@ -235,12 +236,22 @@ function renderCardsMarkup(detections) {
   return detections
     .map((detection, index) => {
       const label = escapeHtml(detection.label);
-      const imageUrl = escapeHtml(cardAssetUrl(detection.label));
-      const title = `${label} (${Math.round((detection.score || 0) * 100)}%)`;
+      const scorePercent = Math.round((detection.score || 0) * 100);
+      const revealed = (detection.score || 0) >= CARD_REVEAL_SCORE;
+      const title = revealed
+        ? `${label} (${scorePercent}%)`
+        : `${label} detected at ${scorePercent}%. Showing default card until ${Math.round(CARD_REVEAL_SCORE * 100)}%.`;
+      const imageMarkup = revealed
+        ? `<img class="cards-hand-image" src="${escapeHtml(cardAssetUrl(detection.label))}" alt="${label}" />`
+        : `<div class="cards-hand-image cards-hand-image-placeholder" aria-label="Awaiting confident card detection">?</div>`;
+      const state = revealed ? "stable" : "unstable";
 
       return `
-        <figure class="cards-hand-card" data-card-index="${index}" title="${escapeHtml(title)}">
-          <img class="cards-hand-image" src="${imageUrl}" alt="${label}" />
+        <figure class="cards-hand-card" data-card-index="${index}" data-state="${state}" title="${escapeHtml(title)}">
+          ${imageMarkup}
+          <figcaption class="cards-hand-score">
+            ${revealed ? label : `Default (${scorePercent}%)`}
+          </figcaption>
         </figure>
       `;
     })

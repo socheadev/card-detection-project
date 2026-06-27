@@ -3,6 +3,7 @@ export const DEFAULT_STREAM_URL = "https://venti.gpc123.com/Aesexy/play.html?id=
 export const DEFAULT_CONFIDENCE = 0.25;
 export const DEFAULT_IOU = 0.70;
 export const DEFAULT_INTERVAL_MS = 180;
+export const CARD_REVEAL_SCORE = 0.75;
 
 export const MODEL_BADGE_IDLE_TEXT = "Not loaded";
 export const MODEL_BADGE_LOADING_TEXT = "Loading...";
@@ -652,7 +653,9 @@ export function cardsOverlayKey(groupedDetections) {
     const detections = groupedDetections[side] || [];
 
     return `${side}:${detections
-      .map((detection) => `${detection.roi}:${detection.label}`)
+      .map((detection) =>
+        `${detection.roi}:${detection.label}:${(detection.score || 0) >= CARD_REVEAL_SCORE ? "revealed" : "default"}`,
+      )
       .join(",")}`;
   }).join("|");
 }

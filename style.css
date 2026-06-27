@@ -358,6 +358,23 @@ canvas {
   filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.28));
 }
 
+.cards-hand-image-placeholder {
+  width: 96px;
+  aspect-ratio: 5 / 7;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  border: 2px solid rgba(255, 255, 255, 0.75);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.05)),
+    linear-gradient(180deg, rgba(14, 116, 144, 0.7), rgba(15, 23, 42, 0.78));
+  color: #ffffff;
+  font-size: 36px;
+  font-weight: 800;
+  line-height: 1;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
 .cards-hand-card[data-state="unstable"] .cards-hand-image {
   filter:
     drop-shadow(0 8px 18px rgba(0, 0, 0, 0.28))
