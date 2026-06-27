@@ -1,0 +1,15 @@
+{
+  "name": "capture-video-web-preview",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve": "node ./scripts/dev-server.mjs",
+    "start": "npm run serve",
+    "sync-assets": "node ./scripts/sync-assets.mjs",
+    "postinstall": "npm run sync-assets"
+  },
+  "dependencies": {
+    "hls.js": "1.6.16",
+    "onnxruntime-web": "1.27.0"
+  }
+}
