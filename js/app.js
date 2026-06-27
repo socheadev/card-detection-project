@@ -8,6 +8,8 @@ import {
   MODEL_BADGE_IDLE_TEXT,
   RAW_MODEL_OUTPUT_IDLE_TEXT,
   STATUS_WAITING_FOR_STREAM_TEXT,
+  appState,
+  emitStatusChanged,
   els,
   MODEL_BADGE_ERROR_TEXT,
   onPreviewEvent,
@@ -64,12 +66,35 @@ function renderDetectionUi() {
 
 async function reload(loadFn, value) {
   stopDetection();
-
-  const loaded = await loadFn(value);
-
-  if (loaded) {
-    await startDetection();
+  try {
+    return await loadFn(value);
+  } finally {
+    syncDetectionControls();
   }
+}
+
+function syncDetectionControls() {
+  if (els.startDetectBtn) {
+    els.startDetectBtn.disabled = appState.detecting || appState.startingDetection;
+  }
+
+  if (els.stopDetectBtn) {
+    els.stopDetectBtn.disabled = !appState.detecting && !appState.startingDetection;
+  }
+}
+
+async function ensureStreamReadyForDetection() {
+  if (appState.streamReady) {
+    return true;
+  }
+
+  if (!els.sourceInput?.value?.trim()) {
+    emitStatusChanged("Enter a stream URL first");
+    return false;
+  }
+
+  emitStatusChanged("Loading stream before detection...");
+  return reload(loadStreamFromInput);
 }
 
 async function writeTextToClipboard(text) {
@@ -144,6 +169,22 @@ function bindEvents() {
   });
 
   els.openVideoBtn?.addEventListener("click", openVideoFilePicker);
+  els.startDetectBtn?.addEventListener("click", async () => {
+    const streamReady = await ensureStreamReadyForDetection();
+
+    if (!streamReady) {
+      syncDetectionControls();
+      return;
+    }
+
+    await startDetection();
+    syncDetectionControls();
+  });
+  els.stopDetectBtn?.addEventListener("click", () => {
+    stopDetection();
+    emitStatusChanged("Detection stopped");
+    syncDetectionControls();
+  });
   els.copyRawModelBtn?.addEventListener("click", copyRawModelOutput);
 
   els.videoFileInput?.addEventListener("change", (event) => {
@@ -158,10 +199,6 @@ function bindEvents() {
   });
 
   els.video?.addEventListener("loadedmetadata", redrawStage);
-  els.video?.addEventListener("play", () => {
-    startDetection();
-  });
-
   window.addEventListener("resize", redrawStage);
 
   if (window.ResizeObserver && els.video) {
@@ -171,12 +208,17 @@ function bindEvents() {
 }
 
 function bindPreviewEvents() {
-  onPreviewEvent(PREVIEW_EVENTS.runtimeViewChanged, renderDetectionUi);
+  onPreviewEvent(PREVIEW_EVENTS.runtimeViewChanged, () => {
+    renderDetectionUi();
+    syncDetectionControls();
+  });
   onPreviewEvent(PREVIEW_EVENTS.overlayInvalidated, drawOverlay);
   onPreviewEvent(PREVIEW_EVENTS.statusChanged, (event) => {
     if (els.statusText) {
       els.statusText.textContent = event.detail.text;
     }
+
+    syncDetectionControls();
   });
   onPreviewEvent(PREVIEW_EVENTS.modelPresentationChanged, (event) => {
     applyModelPresentation(event.detail);
@@ -217,6 +259,8 @@ function applyDefaults() {
   if (els.rawModelOutput) {
     els.rawModelOutput.textContent = RAW_MODEL_OUTPUT_IDLE_TEXT;
   }
+
+  syncDetectionControls();
 }
 
 function bindLifecycle() {

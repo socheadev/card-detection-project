@@ -4,7 +4,7 @@ export const DEFAULT_CONFIDENCE = 0.25;
 export const DEFAULT_IOU = 0.70;
 export const DEFAULT_INTERVAL_MS = 180;
 export const AUTO_LOAD_STREAM = true;
-export const CARD_REVEAL_SCORE = 0.75;
+export const CARD_REVEAL_SCORE = 0.80;
 
 export const MODEL_BADGE_IDLE_TEXT = "Not loaded";
 export const MODEL_BADGE_LOADING_TEXT = "Loading...";
@@ -225,6 +225,8 @@ export const els = {
   sourceInput: document.querySelector("#sourceInput"),
   loadStreamBtn: document.querySelector("#loadStreamBtn"),
   openVideoBtn: document.querySelector("#openVideoBtn"),
+  startDetectBtn: document.querySelector("#startDetectBtn"),
+  stopDetectBtn: document.querySelector("#stopDetectBtn"),
   toggleRoiEditorBtn: document.querySelector("#toggleRoiEditorBtn"),
   loadRoiEditorBtn: document.querySelector("#loadRoiEditorBtn"),
   saveRoiEditorBtn: document.querySelector("#saveRoiEditorBtn"),
@@ -295,6 +297,7 @@ export const appState = {
   modelInputSize: 0,
   streamReady: false,
   detecting: false,
+  startingDetection: false,
   inferenceBusy: false,
   animationFrameId: 0,
   lastRunAt: 0,

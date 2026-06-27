@@ -279,6 +279,7 @@ async function runInferenceFrame() {
 
 export function stopDetection() {
   appState.detecting = false;
+  appState.startingDetection = false;
   appState.inferenceBusy = false;
   appState.lastRunAt = 0;
   appState.hideCardsUntilClear = false;
@@ -335,7 +336,7 @@ async function detectionLoop() {
 }
 
 export async function startDetection() {
-  if (appState.detecting) {
+  if (appState.detecting || appState.startingDetection) {
     if (!appState.animationFrameId) {
       appState.animationFrameId = requestAnimationFrame(detectionLoop);
     }
@@ -349,12 +350,16 @@ export async function startDetection() {
   }
 
   try {
+    appState.startingDetection = true;
+    emitStatusChanged("Starting detection...");
+
     if (els.video.paused) {
       await els.video.play();
     }
 
     await loadModel();
 
+    appState.startingDetection = false;
     appState.detecting = true;
     emitStatusChanged("Starting detection loop");
     appState.animationFrameId = requestAnimationFrame(detectionLoop);
