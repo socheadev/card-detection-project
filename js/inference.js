@@ -6,7 +6,6 @@ import {
   els,
   emitRuntimeViewChanged,
   emitStatusChanged,
-  limitDetectionsPerRoi,
   ROI_ORDER,
   ROI_SIDE,
   roiPixelBounds,
@@ -223,10 +222,7 @@ async function runInferenceFrame() {
     roiBounds,
   );
 
-  const displayedDetections = limitDetectionsPerRoi(
-    [...matchedDetections].sort((left, right) => (right.score || 0) - (left.score || 0)),
-    1,
-  );
+  const displayedDetections = matchedDetections;
   const { displayedDetections: stableDisplayedDetections, resetTriggered } =
     nextDisplayedCards(displayedDetections);
 

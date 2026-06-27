@@ -1,4 +1,5 @@
 import {
+  AUTO_LOAD_STREAM,
   COPY_BUTTON_IDLE_TEXT,
   DEFAULT_CONFIDENCE,
   DEFAULT_INTERVAL_MS,
@@ -229,7 +230,7 @@ function bindLifecycle() {
   });
 }
 
-function init() {
+async function init() {
   applyDefaults();
   bindEvents();
   bindPreviewEvents();
@@ -237,10 +238,25 @@ function init() {
   initRoiEditor();
   renderDetectionUi();
   redrawStage();
+
+  if (AUTO_LOAD_STREAM && els.sourceInput?.value?.trim()) {
+    await reload(loadStreamFromInput);
+  }
 }
 
 try {
-  init();
+  Promise.resolve(init()).catch((error) => {
+    applyModelPresentation({
+      badgeText: MODEL_BADGE_ERROR_TEXT,
+      badgeState: "error",
+    });
+
+    if (els.statusText) {
+      els.statusText.textContent = `Initialization failed: ${error.message}`;
+    }
+
+    throw error;
+  });
 } catch (error) {
   applyModelPresentation({
     badgeText: MODEL_BADGE_ERROR_TEXT,
