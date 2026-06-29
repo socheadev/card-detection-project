@@ -9,11 +9,19 @@ import {
   ROI_ORDER,
   ROI_SIDE,
   roiPixelBounds,
+  roiSlotValue,
   resetRuntimeView,
 } from "./shared.js";
+import { queueBroadcastPayload } from "./broadcast.js";
 import { loadModel, runModelInference } from "./model.js";
 
+const DISPLAY_REPLACEMENT_CONFIRM_FRAMES = 2;
+const DISPLAY_MISS_TOLERANCE_FRAMES = 3;
+const HIGH_CONFIDENCE_REPLACEMENT_SCORE = 0.9;
+const HIGH_CONFIDENCE_REPLACEMENT_DELTA = 0.12;
+
 let displayedCardsState = [];
+let displayedCardsByRoi = new Map();
 
 function centerInsideBounds(detection, bounds) {
   const centerX = detection.x + (detection.width / 2);
@@ -137,6 +145,67 @@ function formatDetectionForDebug(detection) {
   };
 }
 
+function formatBroadcastResult(detection) {
+  return {
+    name: detection.label,
+    class: detection.classId,
+    confidence: detection.score,
+    slot: detection.roi ? roiSlotValue(detection.roi) : null,
+  };
+}
+
+function compareBroadcastResults(left, right) {
+  const leftSlot = Number.isFinite(left?.slot) ? left.slot : Number.MAX_SAFE_INTEGER;
+  const rightSlot = Number.isFinite(right?.slot) ? right.slot : Number.MAX_SAFE_INTEGER;
+
+  if (leftSlot !== rightSlot) {
+    return leftSlot - rightSlot;
+  }
+
+  return (right?.confidence || 0) - (left?.confidence || 0);
+}
+
+function groupedBroadcastResults(detections) {
+  const grouped = {
+    player: [],
+    banker: [],
+  };
+
+  for (const detection of detections) {
+    const result = formatBroadcastResult(detection);
+
+    if (detection.side === "PLAYER") {
+      grouped.player.push(result);
+      continue;
+    }
+
+    if (detection.side === "BANKER") {
+      grouped.banker.push(result);
+    }
+  }
+
+  grouped.player.sort(compareBroadcastResults);
+  grouped.banker.sort(compareBroadcastResults);
+
+  return grouped;
+}
+
+function buildBroadcastPayload(detections) {
+  const grouped = groupedBroadcastResults(detections);
+
+  return {
+    player: grouped.player,
+    banker: grouped.banker,
+  };
+}
+
+function hasBroadcastResults(payload) {
+  return (
+    (Array.isArray(payload?.player) && payload.player.length > 0) ||
+    (Array.isArray(payload?.banker) && payload.banker.length > 0)
+  );
+}
+
 function roiBoundsByName(sourceWidth, sourceHeight) {
   return Object.fromEntries(
     ROI_ORDER.map((roi) => [roi, roiPixelBounds(roi, sourceWidth, sourceHeight)]),
@@ -145,31 +214,124 @@ function roiBoundsByName(sourceWidth, sourceHeight) {
 
 function clearDisplayedCardsState() {
   displayedCardsState = [];
+  displayedCardsByRoi = new Map();
 }
 
-function nextDisplayedCards(frameDetections) {
-  if (!frameDetections.length) {
-    clearDisplayedCardsState();
-    appState.hideCardsUntilClear = false;
-    return {
-      displayedDetections: [],
-      resetTriggered: true,
-    };
-  }
+function sameDisplayedCard(left, right) {
+  return Boolean(
+    left &&
+      right &&
+      left.roi === right.roi &&
+      left.label === right.label &&
+      left.classId === right.classId,
+  );
+}
 
-  displayedCardsState = frameDetections;
+function buildDisplayState(previousState, detection) {
   return {
-    displayedDetections: displayedCardsState,
-    resetTriggered: false,
+    displayed: detection || null,
+    candidate: null,
+    candidateHits: 0,
+    missCount: 0,
   };
 }
 
-async function captureFrameBitmap() {
+function nextDisplayedCards(frameDetections) {
+  const detectionsByRoi = new Map(
+    frameDetections
+      .filter((detection) => detection?.roi)
+      .map((detection) => [detection.roi, detection]),
+  );
+  const nextStateByRoi = new Map();
+  const nextDisplayed = [];
+  let resetTriggered = false;
+
+  for (const roi of ROI_ORDER) {
+    const incoming = detectionsByRoi.get(roi) || null;
+    const previousState = displayedCardsByRoi.get(roi) || buildDisplayState(null, null);
+    const nextState = { ...previousState };
+
+    if (!incoming) {
+      nextState.candidate = null;
+      nextState.candidateHits = 0;
+
+      if (nextState.displayed) {
+        nextState.missCount += 1;
+
+        if (nextState.missCount <= DISPLAY_MISS_TOLERANCE_FRAMES) {
+          nextDisplayed.push(nextState.displayed);
+          nextStateByRoi.set(roi, nextState);
+          continue;
+        }
+
+        nextState.displayed = null;
+        nextState.missCount = 0;
+        resetTriggered = true;
+      }
+
+      nextStateByRoi.set(roi, nextState);
+      continue;
+    }
+
+    nextState.missCount = 0;
+
+    if (!nextState.displayed || sameDisplayedCard(nextState.displayed, incoming)) {
+      nextState.displayed = incoming;
+      nextState.candidate = null;
+      nextState.candidateHits = 0;
+      nextDisplayed.push(nextState.displayed);
+      nextStateByRoi.set(roi, nextState);
+      continue;
+    }
+
+    const previousCandidate = nextState.candidate;
+    const scoreDelta = (incoming.score || 0) - (nextState.displayed.score || 0);
+
+    nextState.candidate = incoming;
+    nextState.candidateHits = sameDisplayedCard(previousCandidate, incoming)
+      ? previousState.candidateHits + 1
+      : 1;
+
+    if (
+      nextState.candidateHits >= DISPLAY_REPLACEMENT_CONFIRM_FRAMES ||
+      (
+        (incoming.score || 0) >= HIGH_CONFIDENCE_REPLACEMENT_SCORE &&
+        scoreDelta >= HIGH_CONFIDENCE_REPLACEMENT_DELTA
+      )
+    ) {
+      nextState.displayed = incoming;
+      nextState.candidate = null;
+      nextState.candidateHits = 0;
+    }
+
+    nextDisplayed.push(nextState.displayed);
+    nextStateByRoi.set(roi, nextState);
+  }
+
+  displayedCardsByRoi = nextStateByRoi;
+  displayedCardsState = nextDisplayed.filter(Boolean);
+  return {
+    displayedDetections: displayedCardsState,
+    resetTriggered,
+  };
+}
+
+async function captureFrameBitmap(cropBounds = null) {
   if (typeof createImageBitmap !== "function") {
     throw new Error("createImageBitmap is not available in this browser");
   }
 
   try {
+    if (cropBounds) {
+      return await createImageBitmap(
+        els.video,
+        cropBounds.x,
+        cropBounds.y,
+        cropBounds.width,
+        cropBounds.height,
+      );
+    }
+
     return await createImageBitmap(els.video);
   } catch (error) {
     if (error?.name === "SecurityError") {
@@ -214,12 +376,14 @@ async function runInferenceFrame(sessionId = appState.detectionSessionId) {
   const displayedDetections = matchedDetections;
   const { displayedDetections: stableDisplayedDetections, resetTriggered } =
     nextDisplayedCards(displayedDetections);
+  const broadcastPayload = buildBroadcastPayload(stableDisplayedDetections);
 
   const rawModelOutput = {
     ...frameResult.rawModelOutput,
     workerPreprocessMs: frameResult.preprocessMs,
     workerPostprocessMs: frameResult.workerPostprocessMs,
     workerTotalMs: frameResult.totalWorkerMs,
+    inferenceMode: "full-frame-then-roi",
     roiBounds,
     rawDetectionCount: frameResult.detections.length,
     matchedDetectionCount: matchedDetections.length,
@@ -230,6 +394,10 @@ async function runInferenceFrame(sessionId = appState.detectionSessionId) {
     unmatchedDetections: unmatchedDetections.map(formatDetectionForDebug),
     displayedDetections: stableDisplayedDetections.map(formatDetectionForDebug),
   };
+
+  if (hasBroadcastResults(broadcastPayload)) {
+    queueBroadcastPayload(broadcastPayload);
+  }
 
   appState.lastRunAt = performance.now();
 
@@ -243,7 +411,8 @@ async function runInferenceFrame(sessionId = appState.detectionSessionId) {
       lastPostprocessMs: frameResult.workerPostprocessMs,
       lastTotalMs: appState.lastRunAt - startedAt,
       debugText:
-        `raw ${frameResult.detections.length}` +
+        `full-frame ${sourceWidth}x${sourceHeight}` +
+        ` raw ${frameResult.detections.length}` +
         ` matched ${matchedDetections.length}` +
         ` displayed ${stableDisplayedDetections.length}`,
     }),

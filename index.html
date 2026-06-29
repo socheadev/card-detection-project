@@ -92,6 +92,71 @@
               <strong class="controls-title"> Model </strong>
 
               <div class="controls-stack">
+                <div class="control-row source-row">
+                  <label class="field source-field">
+                    <span>Broadcast URL</span>
+
+                    <input
+                      id="broadcastUrlInput"
+                      type="text"
+                      spellcheck="false"
+                      placeholder="https://your-system.example/api/detections"
+                    />
+                  </label>
+
+                  <div class="action-row">
+                    <button id="toggleBroadcastBtn" type="button" class="secondary">
+                      Start Broadcast
+                    </button>
+                  </div>
+                </div>
+
+                <div class="broadcast-settings-grid">
+                  <label class="field">
+                    <span>RabbitMQ URL</span>
+
+                    <input
+                      id="rabbitmqUrlInput"
+                      type="text"
+                      spellcheck="false"
+                      placeholder="https://rabbitmq.example.com"
+                    />
+                  </label>
+
+                  <label class="field">
+                    <span>Vhost</span>
+
+                    <input
+                      id="rabbitmqVhostInput"
+                      type="text"
+                      spellcheck="false"
+                      placeholder="/"
+                    />
+                  </label>
+
+                  <label class="field">
+                    <span>Exchange</span>
+
+                    <input
+                      id="rabbitmqExchangeInput"
+                      type="text"
+                      spellcheck="false"
+                      placeholder="amq.direct"
+                    />
+                  </label>
+
+                  <label class="field">
+                    <span>Routing Key</span>
+
+                    <input
+                      id="rabbitmqRoutingKeyInput"
+                      type="text"
+                      spellcheck="false"
+                      placeholder="card.detection"
+                    />
+                  </label>
+                </div>
+
                 <div class="control-row model-thresholds">
                   <div class="action-row">
                     <button id="toggleRoiEditorBtn" type="button" class="secondary">
@@ -189,6 +254,12 @@
 
                     <strong id="bestScoreValue"> 0.00 </strong>
                   </div>
+
+                  <div class="metric metric-primary">
+                    <span class="metric-label"> Broadcast </span>
+
+                    <strong id="broadcastStatusValue"> Disabled </strong>
+                  </div>
                 </div>
 
                 <div class="raw-model-panel">
@@ -205,6 +276,30 @@
                   </div>
 
                   <pre id="rawModelOutput" class="raw-model-output"></pre>
+                </div>
+
+                <div class="raw-model-panel">
+                  <div class="panel-head panel-head-compact">
+                    <h2>RabbitMQ HTTP Viewer</h2>
+                  </div>
+
+                  <div class="metric-grid viewer-metric-grid">
+                    <div class="metric metric-primary">
+                      <span class="metric-label"> Viewer </span>
+
+                      <strong id="rabbitmqViewerStatus" data-state="idle">
+                        Waiting for first HTTP publish
+                      </strong>
+                    </div>
+
+                    <div class="metric">
+                      <span class="metric-label"> Total Published </span>
+
+                      <strong id="rabbitmqViewerCount"> 0 </strong>
+                    </div>
+                  </div>
+
+                  <pre id="rabbitmqViewerOutput" class="raw-model-output"></pre>
                 </div>
               </div>
             </div>

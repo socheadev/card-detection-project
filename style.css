@@ -76,6 +76,18 @@ button#loadStreamBtn:hover {
   background: #009250;
 }
 
+button#toggleBroadcastBtn[data-state="ready"] {
+  background: #0f766e;
+  border-color: #0f766e;
+  color: #fff;
+}
+
+button#toggleBroadcastBtn[data-state="idle"] {
+  background: #eef3f6;
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
 button#loadModelBtn {
   border-color: var(--accent-2);
 }
@@ -428,6 +440,12 @@ canvas {
   gap: 12px;
 }
 
+.broadcast-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .control-row {
   display: flex;
   gap: 10px;
@@ -741,6 +759,10 @@ canvas {
   margin-top: 12px;
 }
 
+.viewer-metric-grid {
+  margin-bottom: 8px;
+}
+
 .raw-model-output {
   margin: 0;
   padding: 10px;
@@ -1004,6 +1026,10 @@ canvas {
 }
 
 @media (max-width: 960px) {
+  .broadcast-settings-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .control-row {
     flex-wrap: wrap;
   }
@@ -1023,6 +1049,10 @@ canvas {
   .workspace,
   .metric-grid,
   .button-stack {
+    grid-template-columns: 1fr;
+  }
+
+  .broadcast-settings-grid {
     grid-template-columns: 1fr;
   }
 

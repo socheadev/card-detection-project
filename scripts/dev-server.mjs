@@ -1,4 +1,4 @@
-import { createReadStream } from "node:fs";
+import { createReadStream, readFileSync } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -9,8 +9,57 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, "..");
 
-const HOST = process.env.HOST || "127.0.0.1";
-const PORT = Number(process.env.PORT || 5500);
+function readDotEnv(filePath) {
+  try {
+    const raw = readFileSync(filePath, "utf8");
+    const values = {};
+
+    for (const line of raw.split(/\r?\n/)) {
+      const trimmed = line.trim();
+
+      if (!trimmed || trimmed.startsWith("#")) {
+        continue;
+      }
+
+      const separatorIndex = trimmed.indexOf("=");
+
+      if (separatorIndex <= 0) {
+        continue;
+      }
+
+      const key = trimmed.slice(0, separatorIndex).trim();
+      let value = trimmed.slice(separatorIndex + 1).trim();
+
+      if (
+        (value.startsWith("\"") && value.endsWith("\"")) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+
+      values[key] = value;
+    }
+
+    return values;
+  } catch {
+    return {};
+  }
+}
+
+const dotEnv = readDotEnv(path.resolve(projectRoot, ".env"));
+
+function envValue(name, fallback = "") {
+  return process.env[name] ?? dotEnv[name] ?? fallback;
+}
+
+const HOST = envValue("HOST", "127.0.0.1");
+const PORT = Number(envValue("PORT", 5500));
+const RABBITMQ_URL = envValue("RABBITMQ_URL", "");
+const RABBITMQ_USERNAME = envValue("RABBITMQ_USERNAME", "");
+const RABBITMQ_PASSWORD = envValue("RABBITMQ_PASSWORD", "");
+const RABBITMQ_VHOST = envValue("RABBITMQ_VHOST", "/");
+const RABBITMQ_EXCHANGE = envValue("RABBITMQ_EXCHANGE", "amq.direct");
+const RABBITMQ_ROUTING_KEY = envValue("RABBITMQ_ROUTING_KEY", "card.detection");
 
 const MIME_TYPES = new Map([
   [".css", "text/css; charset=utf-8"],
@@ -31,9 +80,28 @@ const MIME_TYPES = new Map([
 const PLAYLIST_CONTENT_TYPE_RE =
   /application\/(?:vnd\.apple\.mpegurl|x-mpegurl)|audio\/mpegurl/i;
 
+const localBroadcastState = {
+  lastPayload: null,
+  receivedAt: "",
+  totalReceived: 0,
+};
+
+const rabbitMqBroadcastState = {
+  lastPayload: null,
+  publishedAt: "",
+  totalPublished: 0,
+  publishUrl: "",
+  routed: null,
+  lastError: "",
+};
+
+function normalizeTextField(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function setCorsHeaders(headers) {
   headers.set("Access-Control-Allow-Origin", "*");
-  headers.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+  headers.set("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
   headers.set("Access-Control-Allow-Headers", "*");
   headers.set(
     "Access-Control-Expose-Headers",
@@ -55,6 +123,10 @@ function sendText(res, statusCode, body, contentType = "text/plain; charset=utf-
 function writeHeaders(res, statusCode, headers) {
   const plainHeaders = Object.fromEntries(headers.entries());
   res.writeHead(statusCode, plainHeaders);
+}
+
+function sendJson(res, statusCode, value) {
+  sendText(res, statusCode, JSON.stringify(value, null, 2), "application/json; charset=utf-8");
 }
 
 function isSafePath(filePath) {
@@ -135,6 +207,16 @@ function copyResponseHeaders(sourceHeaders, overrides = {}) {
 
   setCorsHeaders(headers);
   return headers;
+}
+
+async function readRequestBuffer(req) {
+  const chunks = [];
+
+  for await (const chunk of req) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+
+  return Buffer.concat(chunks);
 }
 
 async function handleProxy(req, res, requestUrl) {
@@ -233,6 +315,326 @@ async function handleProxy(req, res, requestUrl) {
   Readable.fromWeb(upstreamResponse.body).pipe(res);
 }
 
+async function handleBroadcast(req, res, requestUrl) {
+  if (req.method === "OPTIONS") {
+    const headers = new Headers();
+    setCorsHeaders(headers);
+    writeHeaders(res, 204, headers);
+    res.end();
+    return;
+  }
+
+  if (req.method !== "POST") {
+    sendText(res, 405, "Method Not Allowed");
+    return;
+  }
+
+  const rawTargetUrl = requestUrl.searchParams.get("url")?.trim();
+
+  if (!rawTargetUrl) {
+    sendText(res, 400, "Missing ?url=... query parameter");
+    return;
+  }
+
+  let targetUrl;
+
+  try {
+    targetUrl = new URL(rawTargetUrl);
+  } catch {
+    sendText(res, 400, "Invalid target URL");
+    return;
+  }
+
+  if (!["http:", "https:"].includes(targetUrl.protocol)) {
+    sendText(res, 400, "Only http:// and https:// targets are supported");
+    return;
+  }
+
+  const body = await readRequestBuffer(req);
+  const upstreamHeaders = new Headers();
+  const contentType = req.headers["content-type"];
+
+  if (contentType) {
+    upstreamHeaders.set("Content-Type", contentType);
+  }
+
+  let upstreamResponse;
+
+  try {
+    upstreamResponse = await fetch(targetUrl, {
+      method: "POST",
+      headers: upstreamHeaders,
+      body,
+      redirect: "follow",
+    });
+  } catch (error) {
+    sendText(res, 502, `Broadcast request failed: ${error.message}`);
+    return;
+  }
+
+  const headers = copyResponseHeaders(upstreamResponse.headers);
+  writeHeaders(res, upstreamResponse.status, headers);
+
+  if (!upstreamResponse.body) {
+    res.end();
+    return;
+  }
+
+  Readable.fromWeb(upstreamResponse.body).pipe(res);
+}
+
+function rabbitMqPublishUrl(baseUrl, vhost, exchange) {
+  const url = new URL(baseUrl);
+  const normalizedPath = url.pathname.replace(/\/+$/, "");
+
+  url.pathname =
+    `${normalizedPath}/api/exchanges/${encodeURIComponent(vhost)}/${encodeURIComponent(exchange)}/publish`;
+  url.search = "";
+  return url.toString();
+}
+
+async function handleRabbitMqBroadcast(req, res) {
+  if (req.method === "OPTIONS") {
+    const headers = new Headers();
+    setCorsHeaders(headers);
+    writeHeaders(res, 204, headers);
+    res.end();
+    return;
+  }
+
+  if (req.method !== "POST") {
+    sendText(res, 405, "Method Not Allowed");
+    return;
+  }
+
+  const rawBody = await readRequestBuffer(req);
+  const rawText = rawBody.toString("utf8");
+
+  let parsedBody;
+
+  try {
+    parsedBody = rawText ? JSON.parse(rawText) : null;
+  } catch {
+    sendText(res, 400, "RabbitMQ request body must be valid JSON");
+    return;
+  }
+
+  const rabbitmq = parsedBody?.rabbitmq || {};
+  const payload = parsedBody?.payload;
+  const baseUrl = normalizeTextField(rabbitmq.url) || RABBITMQ_URL;
+  const username = normalizeTextField(rabbitmq.username) || RABBITMQ_USERNAME;
+  const password =
+    (typeof rabbitmq.password === "string" ? rabbitmq.password : "") ||
+    RABBITMQ_PASSWORD;
+  const vhost = normalizeTextField(rabbitmq.vhost) || RABBITMQ_VHOST;
+  const exchange = normalizeTextField(rabbitmq.exchange) || RABBITMQ_EXCHANGE;
+  const routingKey =
+    normalizeTextField(rabbitmq.routingKey) || RABBITMQ_ROUTING_KEY;
+
+  if (!baseUrl || !username || !password || !exchange || !routingKey) {
+    sendText(
+      res,
+      400,
+      "RabbitMQ config requires url, username, password, exchange, and routingKey. Set them in env or request body.",
+    );
+    return;
+  }
+
+  let publishUrl;
+
+  try {
+    publishUrl = rabbitMqPublishUrl(baseUrl, vhost, exchange);
+  } catch {
+    sendText(res, 400, "RabbitMQ URL is invalid");
+    return;
+  }
+
+  const publishBody = {
+    properties: {},
+    routing_key: routingKey,
+    payload: JSON.stringify(payload),
+    payload_encoding: "string",
+  };
+
+  let upstreamResponse;
+
+  try {
+    upstreamResponse = await fetch(publishUrl, {
+      method: "POST",
+      headers: {
+        Authorization:
+          `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(publishBody),
+      redirect: "follow",
+    });
+  } catch (error) {
+    rabbitMqBroadcastState.lastError = `RabbitMQ publish failed: ${error.message}`;
+    rabbitMqBroadcastState.publishUrl = publishUrl;
+    sendText(res, 502, `RabbitMQ publish failed: ${error.message}`);
+    return;
+  }
+
+  const responseText = await upstreamResponse.text();
+
+  if (!upstreamResponse.ok) {
+    rabbitMqBroadcastState.lastError =
+      responseText || `RabbitMQ publish request failed with HTTP ${upstreamResponse.status}`;
+    rabbitMqBroadcastState.publishUrl = publishUrl;
+    sendText(
+      res,
+      upstreamResponse.status,
+      responseText || "RabbitMQ publish request failed",
+      upstreamResponse.headers.get("content-type") || "text/plain; charset=utf-8",
+    );
+    return;
+  }
+
+  let responseJson = null;
+
+  try {
+    responseJson = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    responseJson = null;
+  }
+
+  if (responseJson && responseJson.routed === false) {
+    rabbitMqBroadcastState.lastError = "RabbitMQ accepted the request but did not route it";
+    rabbitMqBroadcastState.publishUrl = publishUrl;
+    rabbitMqBroadcastState.routed = false;
+    sendJson(res, 502, {
+      ok: false,
+      routed: false,
+      publishUrl,
+      rabbitmqResponse: responseJson,
+    });
+    return;
+  }
+
+  rabbitMqBroadcastState.lastPayload = payload;
+  rabbitMqBroadcastState.publishedAt = new Date().toISOString();
+  rabbitMqBroadcastState.totalPublished += 1;
+  rabbitMqBroadcastState.publishUrl = publishUrl;
+  rabbitMqBroadcastState.routed = responseJson?.routed ?? true;
+  rabbitMqBroadcastState.lastError = "";
+
+  console.log(
+    `[broadcast/rabbitmq] published #${rabbitMqBroadcastState.totalPublished} at ${rabbitMqBroadcastState.publishedAt}`,
+  );
+  console.log(JSON.stringify(payload, null, 2));
+
+  sendJson(res, 200, {
+    ok: true,
+    routed: responseJson?.routed ?? true,
+    publishUrl,
+  });
+}
+
+async function handleRabbitMqViewer(req, res) {
+  if (req.method === "OPTIONS") {
+    const headers = new Headers();
+    setCorsHeaders(headers);
+    writeHeaders(res, 204, headers);
+    res.end();
+    return;
+  }
+
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    sendText(res, 405, "Method Not Allowed");
+    return;
+  }
+
+  const body = {
+    ok: true,
+    publishedAt: rabbitMqBroadcastState.publishedAt || null,
+    totalPublished: rabbitMqBroadcastState.totalPublished,
+    publishUrl: rabbitMqBroadcastState.publishUrl || null,
+    routed: rabbitMqBroadcastState.routed,
+    lastError: rabbitMqBroadcastState.lastError || null,
+    payload: rabbitMqBroadcastState.lastPayload,
+  };
+
+  if (req.method === "HEAD") {
+    const headers = new Headers({
+      "Content-Type": "application/json; charset=utf-8",
+    });
+    setCorsHeaders(headers);
+    writeHeaders(res, 200, headers);
+    res.end();
+    return;
+  }
+
+  sendJson(res, 200, body);
+}
+
+async function handleLocalBroadcast(req, res, requestUrl) {
+  if (req.method === "OPTIONS") {
+    const headers = new Headers();
+    setCorsHeaders(headers);
+    writeHeaders(res, 204, headers);
+    res.end();
+    return;
+  }
+
+  const isLatestPath = requestUrl.pathname.endsWith("/latest");
+
+  if (isLatestPath && (req.method === "GET" || req.method === "HEAD")) {
+
+    const body = {
+      ok: true,
+      receivedAt: localBroadcastState.receivedAt || null,
+      totalReceived: localBroadcastState.totalReceived,
+      payload: localBroadcastState.lastPayload,
+    };
+
+    if (req.method === "HEAD") {
+      const headers = new Headers({
+        "Content-Type": "application/json; charset=utf-8",
+      });
+      setCorsHeaders(headers);
+      writeHeaders(res, 200, headers);
+      res.end();
+      return;
+    }
+
+    sendJson(res, 200, body);
+    return;
+  }
+
+  if (req.method !== "POST") {
+    sendText(res, 405, "Method Not Allowed");
+    return;
+  }
+
+  const rawBody = await readRequestBuffer(req);
+  const rawText = rawBody.toString("utf8");
+
+  let payload;
+
+  try {
+    payload = rawText ? JSON.parse(rawText) : null;
+  } catch {
+    sendText(res, 400, "Broadcast payload must be valid JSON");
+    return;
+  }
+
+  localBroadcastState.lastPayload = payload;
+  localBroadcastState.receivedAt = new Date().toISOString();
+  localBroadcastState.totalReceived += 1;
+
+  console.log(
+    `[broadcast/local-test] received #${localBroadcastState.totalReceived} at ${localBroadcastState.receivedAt}`,
+  );
+  console.log(JSON.stringify(payload, null, 2));
+
+  sendJson(res, 200, {
+    ok: true,
+    receivedAt: localBroadcastState.receivedAt,
+    totalReceived: localBroadcastState.totalReceived,
+  });
+}
+
 async function handleStatic(req, res, requestUrl) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     sendText(res, 405, "Method Not Allowed");
@@ -279,6 +681,29 @@ const server = http.createServer(async (req, res) => {
 
   if (requestUrl.pathname === "/proxy") {
     await handleProxy(req, res, requestUrl);
+    return;
+  }
+
+  if (requestUrl.pathname === "/broadcast") {
+    await handleBroadcast(req, res, requestUrl);
+    return;
+  }
+
+  if (requestUrl.pathname === "/broadcast/rabbitmq") {
+    await handleRabbitMqBroadcast(req, res);
+    return;
+  }
+
+  if (requestUrl.pathname === "/broadcast/rabbitmq/latest") {
+    await handleRabbitMqViewer(req, res);
+    return;
+  }
+
+  if (
+    requestUrl.pathname === "/broadcast/local-test" ||
+    requestUrl.pathname === "/broadcast/local-test/latest"
+  ) {
+    await handleLocalBroadcast(req, res, requestUrl);
     return;
   }
 

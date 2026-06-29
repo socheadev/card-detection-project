@@ -5,6 +5,10 @@ export const DEFAULT_IOU = 0.70;
 export const DEFAULT_INTERVAL_MS = 180;
 export const AUTO_LOAD_STREAM = true;
 export const CARD_REVEAL_SCORE = 0.75;
+export const DEFAULT_RABBITMQ_URL = "https://rabbitmq.sclabproxserver.qzz.io";
+export const DEFAULT_RABBITMQ_VHOST = "/";
+export const DEFAULT_RABBITMQ_EXCHANGE = "amq.direct";
+export const DEFAULT_RABBITMQ_ROUTING_KEY = "card.detection";
 
 export const MODEL_BADGE_IDLE_TEXT = "Not loaded";
 export const MODEL_BADGE_LOADING_TEXT = "Loading...";
@@ -15,6 +19,7 @@ export const STATUS_WAITING_FOR_STREAM_TEXT = "Waiting for a stream";
 export const TIMING_IDLE_TEXT = "No inference yet";
 export const RAW_MODEL_OUTPUT_IDLE_TEXT = "";
 export const COPY_BUTTON_IDLE_TEXT = "Copy Data";
+export const BROADCAST_STATUS_IDLE_TEXT = "Disabled";
 
 export const MODEL_URL = new URL("../model/best.onnx", import.meta.url).toString();
 export const MODEL_MANIFEST_URL = new URL("../model/best.onnx.manifest.json", import.meta.url).toString();
@@ -226,6 +231,15 @@ export const els = {
   loadStreamBtn: document.querySelector("#loadStreamBtn"),
   startDetectBtn: document.querySelector("#startDetectBtn"),
   stopDetectBtn: document.querySelector("#stopDetectBtn"),
+  broadcastUrlInput: document.querySelector("#broadcastUrlInput"),
+  rabbitmqUrlInput: document.querySelector("#rabbitmqUrlInput"),
+  rabbitmqVhostInput: document.querySelector("#rabbitmqVhostInput"),
+  rabbitmqExchangeInput: document.querySelector("#rabbitmqExchangeInput"),
+  rabbitmqRoutingKeyInput: document.querySelector("#rabbitmqRoutingKeyInput"),
+  rabbitmqViewerStatus: document.querySelector("#rabbitmqViewerStatus"),
+  rabbitmqViewerCount: document.querySelector("#rabbitmqViewerCount"),
+  rabbitmqViewerOutput: document.querySelector("#rabbitmqViewerOutput"),
+  toggleBroadcastBtn: document.querySelector("#toggleBroadcastBtn"),
   toggleRoiEditorBtn: document.querySelector("#toggleRoiEditorBtn"),
   loadRoiEditorBtn: document.querySelector("#loadRoiEditorBtn"),
   saveRoiEditorBtn: document.querySelector("#saveRoiEditorBtn"),
@@ -244,6 +258,7 @@ export const els = {
   timingText: document.querySelector("#timingText"),
   countValue: document.querySelector("#countValue"),
   bestScoreValue: document.querySelector("#bestScoreValue"),
+  broadcastStatusValue: document.querySelector("#broadcastStatusValue"),
   copyRawModelBtn: document.querySelector("#copyRawModelBtn"),
   rawModelOutput: document.querySelector("#rawModelOutput"),
   roiFileInput: document.querySelector("#roiFileInput"),
@@ -258,6 +273,7 @@ export const PREVIEW_EVENTS = {
   overlayInvalidated: "preview:overlay-invalidated",
   statusChanged: "preview:status-changed",
   modelPresentationChanged: "preview:model-presentation-changed",
+  broadcastStateChanged: "preview:broadcast-state-changed",
 };
 
 function emitPreviewEvent(type, detail = {}) {
@@ -288,6 +304,10 @@ export function emitModelPresentationChanged(detail) {
   emitPreviewEvent(PREVIEW_EVENTS.modelPresentationChanged, detail);
 }
 
+export function emitBroadcastStateChanged(detail) {
+  emitPreviewEvent(PREVIEW_EVENTS.broadcastStateChanged, detail);
+}
+
 export const appState = {
   hls: null,
   fileObjectUrl: "",
@@ -296,6 +316,7 @@ export const appState = {
   modelInputSize: 0,
   streamMode: "video",
   streamReady: false,
+  loadingStream: false,
   preparingDetection: false,
   detecting: false,
   startingDetection: false,
@@ -306,6 +327,12 @@ export const appState = {
   hideCardsUntilClear: false,
   roiEditorEnabled: false,
   roiInputsCollapsed: true,
+  broadcastEnabled: false,
+  broadcastTargetUrl: "",
+  rabbitmqUrl: "",
+  rabbitmqVhost: DEFAULT_RABBITMQ_VHOST,
+  rabbitmqExchange: DEFAULT_RABBITMQ_EXCHANGE,
+  rabbitmqRoutingKey: DEFAULT_RABBITMQ_ROUTING_KEY,
 };
 
 export function createEmptyRuntimeView() {
