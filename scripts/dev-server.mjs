@@ -222,66 +222,128 @@ async function closeRabbitMqAmqpConnection() {
 }
 
 function emptyCardPayload() {
-  return {
-    player: {
-      card1: null,
-      card2: null,
-      card3: null,
-    },
-    banker: {
-      card1: null,
-      card2: null,
-      card3: null,
-    },
-  };
+  return [];
 }
 
-function normalizeCardEntry(entry) {
+function normalizeCardValue(value) {
+  if (Number.isFinite(value)) {
+    return value >= 1 && value <= 13 ? value : null;
+  }
+
+  const normalized = String(value ?? "").trim().toUpperCase();
+
+  if (normalized === "A") {
+    return 1;
+  }
+
+  if (normalized === "J") {
+    return 11;
+  }
+
+  if (normalized === "Q") {
+    return 12;
+  }
+
+  if (normalized === "K") {
+    return 13;
+  }
+
+  const numeric = Number.parseInt(normalized, 10);
+  return Number.isFinite(numeric) && numeric >= 2 && numeric <= 10 ? numeric : null;
+}
+
+function normalizeCardEntry(entry, fallbackSide = "", fallbackNumber = null) {
   if (!entry || typeof entry !== "object") {
     return null;
   }
 
-  const suit = typeof entry?.suit === "string" ? entry.suit : "";
-  const value = String(entry?.value ?? "").trim().toUpperCase();
+  const suit = typeof entry?.suit === "string" ? entry.suit.trim().toLowerCase() : "";
+  const value = normalizeCardValue(entry?.value);
+  const number = Number.parseInt(String(entry?.number ?? fallbackNumber ?? ""), 10);
+  const side = String(entry?.side ?? fallbackSide ?? "").trim().toLowerCase();
 
-  if (!suit || !/^(10|[2-9AJQK])$/.test(value)) {
+  if (
+    !suit ||
+    value === null ||
+    !Number.isFinite(number) ||
+    number < 1 ||
+    number > 3 ||
+    (side !== "player" && side !== "banker")
+  ) {
     return null;
   }
 
-  return { suit, value };
+  return { suit, value, number, side };
 }
 
 function normalizeCardPayload(payload) {
   const source = payload && typeof payload === "object" ? payload : {};
-  const normalizeSide = (side) => {
-    const sourceSide = side && typeof side === "object" ? side : {};
-    return {
-      card1: normalizeCardEntry(sourceSide.card1),
-      card2: normalizeCardEntry(sourceSide.card2),
-      card3: normalizeCardEntry(sourceSide.card3),
-    };
-  };
+  const entries = Array.isArray(payload)
+    ? payload
+    : Array.isArray(source.cards)
+      ? source.cards
+      : [];
+  const cards = [];
 
-  return {
-    player: normalizeSide(source.player),
-    banker: normalizeSide(source.banker),
-  };
+  for (const entry of entries) {
+    const normalized = normalizeCardEntry(entry);
+
+    if (normalized) {
+      cards.push(normalized);
+    }
+  }
+
+  if (cards.length > 0) {
+    return cards.sort((left, right) => {
+      if (left.side !== right.side) {
+        return left.side === "player" ? -1 : 1;
+      }
+
+      return left.number - right.number;
+    });
+  }
+
+  const legacyCards = [];
+
+  for (const side of ["player", "banker"]) {
+    for (const slot of [1, 2, 3]) {
+      const normalized = normalizeCardEntry(source?.[side]?.[`card${slot}`], side, slot);
+
+      if (normalized) {
+        legacyCards.push(normalized);
+      }
+    }
+  }
+
+  return legacyCards.sort((left, right) => {
+    if (left.side !== right.side) {
+      return left.side === "player" ? -1 : 1;
+    }
+
+    return left.number - right.number;
+  });
 }
 
 function mergeCardPayload(previousPayload, nextPayload) {
   const previous = normalizeCardPayload(previousPayload);
   const next = normalizeCardPayload(nextPayload);
+  const merged = new Map();
 
-  const mergeSide = (previousEntries, nextEntries) => ({
-    card1: nextEntries.card1 || previousEntries.card1 || null,
-    card2: nextEntries.card2 || previousEntries.card2 || null,
-    card3: nextEntries.card3 || previousEntries.card3 || null,
+  for (const entry of previous) {
+    merged.set(`${entry.side}:${entry.number}`, entry);
+  }
+
+  for (const entry of next) {
+    merged.set(`${entry.side}:${entry.number}`, entry);
+  }
+
+  return Array.from(merged.values()).sort((left, right) => {
+    if (left.side !== right.side) {
+      return left.side === "player" ? -1 : 1;
+    }
+
+    return left.number - right.number;
   });
-
-  return {
-    player: mergeSide(previous.player, next.player),
-    banker: mergeSide(previous.banker, next.banker),
-  };
 }
 
 function setCorsHeaders(headers) {

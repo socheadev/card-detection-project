@@ -48,45 +48,46 @@ The detector captures video frames and posts results to:
 
 ## Broadcast Payload
 
-The current outbound payload is grouped by side and slot:
+The current outbound payload is a flat card list:
 
 ```json
-{
-  "player": {
-    "card1": {
-      "suit": "spades",
-      "value": "4"
-    },
-    "card2": {
-      "suit": "clubs",
-      "value": "K"
-    },
-    "card3": {
-      "suit": "clubs",
-      "value": "2"
-    }
+[
+  {
+    "suit": "spades",
+    "value": 4,
+    "number": 1,
+    "side": "player"
   },
-  "banker": {
-    "card1": {
-      "suit": "clubs",
-      "value": "4"
-    },
-    "card2": {
-      "suit": "spades",
-      "value": "A"
-    },
-    "card3": {
-      "suit": "spades",
-      "value": "3"
-    }
+  {
+    "suit": "clubs",
+    "value": 13,
+    "number": 2,
+    "side": "player"
+  },
+  {
+    "suit": "hearts",
+    "value": 12,
+    "number": 1,
+    "side": "banker"
   }
-}
+]
 ```
 
 Value mapping:
 
-- `A`, `J`, `Q`, `K` -> string
-- `2`..`10` -> string
+- `A` -> `1`
+- `2`..`10` -> numeric rank
+- `J` -> `11`
+- `Q` -> `12`
+- `K` -> `13`
+
+Slot mapping:
+
+- `number` -> `1`, `2`, `3`
+
+Side mapping:
+
+- `side` -> `player` or `banker`
 
 Suit mapping:
 

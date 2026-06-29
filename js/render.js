@@ -74,57 +74,130 @@ function formatDetection(detection) {
   };
 }
 
-function emptyCardPayload() {
-  return {
-    player: {
-      card1: null,
-      card2: null,
-      card3: null,
-    },
-    banker: {
-      card1: null,
-      card2: null,
-      card3: null,
-    },
-  };
-}
-
 function normalizeCardPayloadValue(value) {
+  if (Number.isFinite(value)) {
+    return value >= 1 && value <= 13 ? value : null;
+  }
+
   const normalized = String(value ?? "").trim().toUpperCase();
 
-  return /^(10|[2-9AJQK])$/.test(normalized) ? normalized : null;
+  if (normalized === "A") {
+    return 1;
+  }
+
+  if (normalized === "J") {
+    return 11;
+  }
+
+  if (normalized === "Q") {
+    return 12;
+  }
+
+  if (normalized === "K") {
+    return 13;
+  }
+
+  const numeric = Number.parseInt(normalized, 10);
+  return Number.isFinite(numeric) && numeric >= 2 && numeric <= 10 ? numeric : null;
 }
 
-function normalizeCardPayloadEntry(entry) {
-  const suit = typeof entry?.suit === "string" ? entry.suit : "";
+function normalizeCardPayloadEntry(entry, fallbackSide = "", fallbackNumber = null) {
+  const suit = typeof entry?.suit === "string" ? entry.suit.trim().toLowerCase() : "";
   const value = normalizeCardPayloadValue(entry?.value);
+  const number = Number.parseInt(String(entry?.number ?? fallbackNumber ?? ""), 10);
+  const side = String(entry?.side ?? fallbackSide ?? "").trim().toLowerCase();
 
-  if (!suit || value === null) {
+  if (
+    !suit ||
+    value === null ||
+    !Number.isFinite(number) ||
+    number < 1 ||
+    number > 3 ||
+    (side !== "player" && side !== "banker")
+  ) {
     return null;
   }
 
   return {
     suit,
     value,
+    number,
+    side,
   };
 }
 
 function normalizeCardPayload(source) {
-  const payload = emptyCardPayload();
+  const entries = Array.isArray(source)
+    ? source
+    : Array.isArray(source?.cards)
+      ? source.cards
+      : [];
+  const cards = [];
 
-  for (const side of ["player", "banker"]) {
-    for (const slot of ["card1", "card2", "card3"]) {
-      payload[side][slot] = normalizeCardPayloadEntry(source?.[side]?.[slot]);
+  for (const entry of entries) {
+    const normalized = normalizeCardPayloadEntry(entry);
+
+    if (normalized) {
+      cards.push(normalized);
     }
   }
 
-  return payload;
+  if (cards.length > 0) {
+    return cards.sort((left, right) => {
+      if (left.side !== right.side) {
+        return left.side === "player" ? -1 : 1;
+      }
+
+      return left.number - right.number;
+    });
+  }
+
+  const legacyCards = [];
+
+  for (const side of ["player", "banker"]) {
+    for (const slot of [1, 2, 3]) {
+      const normalized = normalizeCardPayloadEntry(
+        source?.[side]?.[`card${slot}`],
+        side,
+        slot,
+      );
+
+      if (normalized) {
+        legacyCards.push(normalized);
+      }
+    }
+  }
+
+  return legacyCards.sort((left, right) => {
+    if (left.side !== right.side) {
+      return left.side === "player" ? -1 : 1;
+    }
+
+    return left.number - right.number;
+  });
 }
 
 function payloadValue(rank) {
   const normalized = String(rank || "").trim().toUpperCase();
 
-  return /^(10|[2-9AJQK])$/.test(normalized) ? normalized : null;
+  if (normalized === "A") {
+    return 1;
+  }
+
+  if (normalized === "J") {
+    return 11;
+  }
+
+  if (normalized === "Q") {
+    return 12;
+  }
+
+  if (normalized === "K") {
+    return 13;
+  }
+
+  const numeric = Number.parseInt(normalized, 10);
+  return Number.isFinite(numeric) && numeric >= 2 && numeric <= 10 ? numeric : null;
 }
 
 function payloadCardFromLabel(label) {
@@ -156,26 +229,31 @@ function payloadCardFromLabel(label) {
 }
 
 function payloadFromDisplayedDetections(displayedDetections) {
-  const payload = emptyCardPayload();
+  const payload = [];
 
   for (const detection of displayedDetections || []) {
-    const side = String(detection?.side || "").toUpperCase();
-    const slot = detection?.roi ? roiSlotValue(detection.roi) : null;
+    const side = String(detection?.side || "").toLowerCase();
+    const number = detection?.roi ? roiSlotValue(detection.roi) : null;
     const card = payloadCardFromLabel(detection?.label);
-    const key = Number.isFinite(slot) ? `card${slot}` : "";
 
-    if (!key || !card) {
+    if (!Number.isFinite(number) || !card || (side !== "player" && side !== "banker")) {
       continue;
     }
 
-    if (side === "PLAYER") {
-      payload.player[key] = card;
-    } else if (side === "BANKER") {
-      payload.banker[key] = card;
-    }
+    payload.push({
+      ...card,
+      number,
+      side,
+    });
   }
 
-  return payload;
+  return payload.sort((left, right) => {
+    if (left.side !== right.side) {
+      return left.side === "player" ? -1 : 1;
+    }
+
+    return left.number - right.number;
+  });
 }
 
 export function formatCardGroupsForDisplay(payload) {
@@ -225,7 +303,9 @@ function formatRawModelOutput(runtimeView) {
   }
 
   const hasStructuredPayload =
-    runtimeView.rawModelOutput?.player &&
+    Array.isArray(runtimeView.rawModelOutput?.cards) ||
+    Array.isArray(runtimeView.rawModelOutput) ||
+    runtimeView.rawModelOutput?.player ||
     runtimeView.rawModelOutput?.banker;
   const payload = hasStructuredPayload
     ? normalizeCardPayload(runtimeView.rawModelOutput)

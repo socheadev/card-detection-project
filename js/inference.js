@@ -291,18 +291,7 @@ function detectionPreview(detections) {
 }
 
 function buildBroadcastPayload(detections) {
-  const payload = {
-    player: {
-      card1: null,
-      card2: null,
-      card3: null,
-    },
-    banker: {
-      card1: null,
-      card2: null,
-      card3: null,
-    },
-  };
+  const payload = [];
 
   const SUIT_NAMES = {
     C: "clubs",
@@ -314,7 +303,24 @@ function buildBroadcastPayload(detections) {
   const payloadValue = (rank) => {
     const normalized = String(rank || "").trim().toUpperCase();
 
-    return /^(10|[2-9AJQK])$/.test(normalized) ? normalized : null;
+    if (normalized === "A") {
+      return 1;
+    }
+
+    if (normalized === "J") {
+      return 11;
+    }
+
+    if (normalized === "Q") {
+      return 12;
+    }
+
+    if (normalized === "K") {
+      return 13;
+    }
+
+    const numeric = Number.parseInt(normalized, 10);
+    return Number.isFinite(numeric) && numeric >= 2 && numeric <= 10 ? numeric : null;
   };
 
   const broadcastCardFromLabel = (label) => {
@@ -337,22 +343,28 @@ function buildBroadcastPayload(detections) {
   };
 
   for (const detection of detections) {
-    const slot = detection.roi ? roiSlotValue(detection.roi) : null;
+    const number = detection.roi ? roiSlotValue(detection.roi) : null;
     const card = broadcastCardFromLabel(detection.label);
-    const key = Number.isFinite(slot) ? `card${slot}` : "";
+    const side = String(detection.side || "").toLowerCase();
 
-    if (!key || !card) {
+    if (!Number.isFinite(number) || !card || (side !== "player" && side !== "banker")) {
       continue;
     }
 
-    if (detection.side === "PLAYER") {
-      payload.player[key] = card;
-    } else if (detection.side === "BANKER") {
-      payload.banker[key] = card;
-    }
+    payload.push({
+      ...card,
+      number,
+      side,
+    });
   }
 
-  return payload;
+  return payload.sort((left, right) => {
+    if (left.side !== right.side) {
+      return left.side === "player" ? -1 : 1;
+    }
+
+    return left.number - right.number;
+  });
 }
 
 function buildBroadcastResults(detections) {
@@ -367,10 +379,7 @@ function buildBroadcastResults(detections) {
 }
 
 function hasPayloadCards(payload) {
-  const sideHasCards = (side) =>
-    Object.values(side || {}).some((card) => card && typeof card === "object");
-
-  return sideHasCards(payload.player) || sideHasCards(payload.banker);
+  return Array.isArray(payload) && payload.length > 0;
 }
 
 function buildBroadcastMessage({
@@ -388,8 +397,7 @@ function buildBroadcastMessage({
     rawModelOutput: {
       ...(rawModelOutput || {}),
       results: buildBroadcastResults(displayedDetections),
-      player: payload.player,
-      banker: payload.banker,
+      cards: payload,
       lastInferenceMs,
       lastPostprocessMs,
       lastTotalMs,

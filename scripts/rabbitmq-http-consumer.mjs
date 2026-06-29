@@ -144,14 +144,103 @@ function suitColor(suitCode) {
   return "";
 }
 
+function rankLabel(value) {
+  const numeric = Number.parseInt(String(value ?? ""), 10);
+
+  if (!Number.isFinite(numeric)) {
+    return "?";
+  }
+
+  if (numeric === 1) {
+    return "A";
+  }
+
+  if (numeric === 11) {
+    return "J";
+  }
+
+  if (numeric === 12) {
+    return "Q";
+  }
+
+  if (numeric === 13) {
+    return "K";
+  }
+
+  return numeric >= 2 && numeric <= 10 ? String(numeric) : "?";
+}
+
+function normalizePayloadCards(payload) {
+  if (Array.isArray(payload)) {
+    return payload
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => ({
+        suit: String(entry.suit || "").trim().toLowerCase(),
+        value: Number.parseInt(String(entry.value ?? ""), 10),
+        number: Number.parseInt(String(entry.number ?? ""), 10),
+        side: String(entry.side || "").trim().toLowerCase(),
+      }))
+      .filter(
+        (entry) =>
+          entry.suit &&
+          Number.isFinite(entry.value) &&
+          entry.value >= 1 &&
+          entry.value <= 13 &&
+          Number.isFinite(entry.number) &&
+          entry.number >= 1 &&
+          entry.number <= 3 &&
+          (entry.side === "player" || entry.side === "banker"),
+      );
+  }
+
+  const cards = [];
+
+  for (const side of ["player", "banker"]) {
+    const sourceSide = payload?.[side];
+
+    for (const number of [1, 2, 3]) {
+      const entry = sourceSide?.[`card${number}`];
+
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+
+      const valueText = String(entry.value ?? "").trim().toUpperCase();
+      const value =
+        valueText === "A"
+          ? 1
+          : valueText === "J"
+            ? 11
+            : valueText === "Q"
+              ? 12
+              : valueText === "K"
+                ? 13
+                : Number.parseInt(valueText, 10);
+
+      if (!Number.isFinite(value)) {
+        continue;
+      }
+
+      cards.push({
+        suit: String(entry.suit || "").trim().toLowerCase(),
+        value,
+        number,
+        side,
+      });
+    }
+  }
+
+  return cards;
+}
+
 function summarizeCards(cards) {
-  const source = cards && typeof cards === "object" ? cards : {};
+  const source = Array.isArray(cards) ? cards : [];
   const cardCode = (card) => {
     if (!card || typeof card !== "object") {
       return "--";
     }
 
-    const value = String(card?.value ?? "").trim().toUpperCase();
+    const value = rankLabel(card?.value);
     const suit = String(card?.suit ?? "").trim().toLowerCase();
     const suitCode =
       suit === "clubs"
@@ -168,8 +257,9 @@ function summarizeCards(cards) {
   };
 
   return ["card1", "card2", "card3"]
-    .map((key) => {
-      const plainCode = cardCode(source[key]).padEnd(3, " ");
+    .map((key, index) => {
+      const entry = source.find((card) => card.number === index + 1) || null;
+      const plainCode = cardCode(entry).padEnd(3, " ");
       const color = suitColor(plainCode.trim().slice(-1));
       return `${colorize(`${key}=`, ANSI.dim)}${colorize(plainCode, color)}`;
     })
@@ -292,27 +382,8 @@ while (!stopped) {
       continue;
     }
 
-    const playerCards = parsedBody.player && typeof parsedBody.player === "object"
-      ? parsedBody.player
-      : {};
-    const bankerCards = parsedBody.banker && typeof parsedBody.banker === "object"
-      ? parsedBody.banker
-      : {};
-    const resultCards = Array.isArray(parsedBody.results) ? parsedBody.results : [];
-
-    console.log(
-      `${colorize("PLAYER", `${ANSI.bold}${ANSI.blue}`)} ${summarizeCards(playerCards)}`,
-    );
-    console.log(
-      `${colorize("BANKER", `${ANSI.bold}${ANSI.yellow}`)} ${summarizeCards(bankerCards)}`,
-    );
-
-    if (resultCards.length > 0) {
-      console.log(
-        `${colorize("RESULTS", `${ANSI.bold}${ANSI.cyan}`)} ${resultCards.length}`,
-      );
-    }
-
+    const cards = normalizePayloadCards(parsedBody);
+    console.log(JSON.stringify(cards.length > 0 ? cards : parsedBody, null, 4));
     console.log("");
   }
 
