@@ -1,4 +1,5 @@
 import {
+  appState,
   cardAssetUrl,
   cardsOverlayKey,
   els,
@@ -6,6 +7,7 @@ import {
   groupDetectionsBySide,
   overlayCtx,
   ROI_ORDER,
+  ROI_REFERENCE_FRAME,
   ROI_SIDE,
   roiSlotValue,
   runtimeView,
@@ -13,6 +15,8 @@ import {
 } from "./shared.js";
 
 let cardsMarkupKey = "";
+let rawOutputKey = "";
+const DEFAULT_VIEWER_ASPECT_RATIO = "16 / 9";
 
 const ROI_STYLES = {
   PLAYER: {
@@ -125,7 +129,6 @@ function formatRawModelOutput(runtimeView) {
     const side = String(detection?.side || "").toUpperCase();
     const entry = {
       name: detection.label,
-      confidence: detection.score,
       slot: detection.roi ? roiSlotValue(detection.roi) : null,
     };
 
@@ -137,6 +140,11 @@ function formatRawModelOutput(runtimeView) {
   }
 
   return formatCardGroupsForDisplay(payload);
+}
+
+function rawOutputDisplayKey(displayedDetections) {
+  const grouped = groupDetectionsBySide(displayedDetections || []);
+  return cardsOverlayKey(grouped);
 }
 
 function drawRawDetectionBoxes(frameRect) {
@@ -164,18 +172,63 @@ function drawRawDetectionBoxes(frameRect) {
   }
 }
 
-export function currentVisibleFrameRect() {
-  const videoWidth = els.video?.videoWidth || 0;
-  const videoHeight = els.video?.videoHeight || 0;
-  const rect = els.video?.getBoundingClientRect();
+function currentFrameSourceSize() {
+  if (appState.streamMode === "iframe") {
+    const detectedWidth = Math.round(runtimeView.rawModelOutput?.frame?.width || 0);
+    const detectedHeight = Math.round(runtimeView.rawModelOutput?.frame?.height || 0);
 
-  if (!videoWidth || !videoHeight || !rect?.width || !rect?.height) {
+    if (detectedWidth && detectedHeight) {
+      return {
+        width: detectedWidth,
+        height: detectedHeight,
+      };
+    }
+
+    const iframeRect = els.remoteFrame?.getBoundingClientRect();
+
+    if (iframeRect?.width && iframeRect?.height) {
+      return {
+        width: Math.round(iframeRect.width),
+        height: Math.round(iframeRect.height),
+      };
+    }
+
+    return {
+      width: ROI_REFERENCE_FRAME.width,
+      height: ROI_REFERENCE_FRAME.height,
+    };
+  }
+
+  const width = els.video?.videoWidth || 0;
+  const height = els.video?.videoHeight || 0;
+
+  if (!width || !height) {
     return null;
   }
 
-  const scale = Math.max(rect.width / videoWidth, rect.height / videoHeight);
-  const width = videoWidth * scale;
-  const height = videoHeight * scale;
+  return { width, height };
+}
+
+export function currentVisibleFrameRect() {
+  const frameSourceSize = currentFrameSourceSize();
+  const rect =
+    els.overlay?.getBoundingClientRect() ||
+    (appState.streamMode !== "video"
+      ? els.remoteFrame?.getBoundingClientRect()
+      : null) ||
+    els.viewerStage?.getBoundingClientRect() ||
+    els.video?.getBoundingClientRect();
+
+  if (!frameSourceSize || !rect?.width || !rect?.height) {
+    return null;
+  }
+
+  const scale = Math.max(
+    rect.width / frameSourceSize.width,
+    rect.height / frameSourceSize.height,
+  );
+  const width = frameSourceSize.width * scale;
+  const height = frameSourceSize.height * scale;
 
   return {
     scale,
@@ -186,12 +239,36 @@ export function currentVisibleFrameRect() {
   };
 }
 
-export function resizeOverlay() {
-  if (!overlayCtx || !els.overlay || !els.video) {
+export function syncViewerStageAspectRatio() {
+  if (!els.viewerStage) {
     return;
   }
 
-  const rect = els.video.getBoundingClientRect();
+  if (appState.streamMode !== "video") {
+    els.viewerStage.style.aspectRatio = DEFAULT_VIEWER_ASPECT_RATIO;
+    return;
+  }
+
+  const videoWidth = els.video?.videoWidth || 0;
+  const videoHeight = els.video?.videoHeight || 0;
+
+  els.viewerStage.style.aspectRatio =
+    videoWidth && videoHeight
+      ? `${videoWidth} / ${videoHeight}`
+      : DEFAULT_VIEWER_ASPECT_RATIO;
+}
+
+export function resizeOverlay() {
+  if (!overlayCtx || !els.overlay) {
+    return;
+  }
+
+  const rect =
+    (appState.streamMode !== "video"
+      ? els.remoteFrame?.getBoundingClientRect()
+      : null) ||
+    els.viewerStage?.getBoundingClientRect() ||
+    els.video?.getBoundingClientRect();
 
   if (!rect.width || !rect.height) {
     return;
@@ -210,7 +287,7 @@ export function resizeOverlay() {
 }
 
 export function drawOverlay() {
-  if (!overlayCtx || !els.overlay || !els.video) {
+  if (!overlayCtx || !els.overlay) {
     return;
   }
 
@@ -226,9 +303,15 @@ export function drawOverlay() {
     return;
   }
 
+  const frameSourceSize = currentFrameSourceSize();
+
+  if (!frameSourceSize) {
+    return;
+  }
+
   const roiBounds = fullFrameRoiBounds(
-    els.video.videoWidth,
-    els.video.videoHeight,
+    frameSourceSize.width,
+    frameSourceSize.height,
   );
 
   for (const roi of ROI_ORDER) {
@@ -262,8 +345,26 @@ export function renderRuntimeSummary(runtimeView) {
 }
 
 export function renderRawModelOutput(runtimeView) {
-  if (els.rawModelOutput) {
+  if (!els.rawModelOutput) {
+    return;
+  }
+
+  const hasRawOutput = Boolean(runtimeView.rawModelOutput);
+
+  if (!hasRawOutput) {
+    if (rawOutputKey) {
+      els.rawModelOutput.textContent = "";
+      rawOutputKey = "";
+    }
+
+    return;
+  }
+
+  const nextKey = rawOutputDisplayKey(runtimeView.displayedDetections);
+
+  if (rawOutputKey !== nextKey || !els.rawModelOutput.textContent.trim()) {
     els.rawModelOutput.textContent = formatRawModelOutput(runtimeView);
+    rawOutputKey = nextKey;
   }
 }
 

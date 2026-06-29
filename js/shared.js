@@ -3,6 +3,7 @@ export const DEFAULT_STREAM_URL = "https://venti.gpc123.com/Aesexy/play.html?id=
 export const DEFAULT_CONFIDENCE = 0.25;
 export const DEFAULT_IOU = 0.70;
 export const DEFAULT_INTERVAL_MS = 100;
+export const DEFAULT_DETECT_EVERY_NTH_FRAME = 1;
 export const AUTO_LOAD_STREAM = false;
 export const CARD_REVEAL_SCORE = 0.80;
 export const DEFAULT_RABBITMQ_URL = "https://rabbitmq.sclabproxserver.qzz.io";
@@ -243,6 +244,8 @@ export const els = {
   confidenceInput: document.querySelector("#confidenceInput"),
   iouInput: document.querySelector("#iouInput"),
   intervalInput: document.querySelector("#intervalInput"),
+  frameSkipInput: document.querySelector("#frameSkipInput"),
+  viewerStage: document.querySelector(".viewer-stage"),
   video: document.querySelector("#video"),
   remoteFrame: document.querySelector("#remoteFrame"),
   overlay: document.querySelector("#overlay"),
@@ -424,6 +427,11 @@ export function currentThresholds() {
       parseIntegerInput(els.intervalInput, DEFAULT_INTERVAL_MS),
       16,
       2000,
+    ),
+    detectEveryNthFrame: clamp(
+      parseIntegerInput(els.frameSkipInput, DEFAULT_DETECT_EVERY_NTH_FRAME),
+      1,
+      30,
     ),
   };
 }

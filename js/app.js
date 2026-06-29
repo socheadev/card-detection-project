@@ -3,6 +3,7 @@ import {
   BROADCAST_STATUS_IDLE_TEXT,
   COPY_BUTTON_IDLE_TEXT,
   DEFAULT_CONFIDENCE,
+  DEFAULT_DETECT_EVERY_NTH_FRAME,
   DEFAULT_INTERVAL_MS,
   DEFAULT_IOU,
   DEFAULT_RABBITMQ_EXCHANGE,
@@ -29,13 +30,18 @@ import {
   setBroadcastTargetUrl,
   toggleBroadcasting,
 } from "./broadcast.js";
-import { startDetection, stopDetection } from "./inference.js";
+import {
+  applyExternalDetections,
+  startDetection,
+  stopDetection,
+} from "./inference.js";
 import {
   drawOverlay,
   renderCardsOverlay,
   renderRawModelOutput,
   renderRuntimeSummary,
   resizeOverlay,
+  syncViewerStageAspectRatio,
 } from "./render.js";
 import { initRoiEditor, renderRoiEditor } from "./roi-editor.js";
 import {
@@ -43,8 +49,11 @@ import {
 } from "./stream.js";
 
 const COPY_BUTTON_RESET_MS = 1400;
+const DETECTOR_POLL_MS = 500;
 
 let copyButtonResetTimer = 0;
+let detectorPollTimer = 0;
+let lastDetectorUpdatedAt = "";
 let resizeObserver = null;
 
 function setElementState(element, stateName) {
@@ -76,6 +85,10 @@ function renderDetectionUi() {
 }
 
 async function startAutoDetection() {
+  if (appState.streamMode === "iframe") {
+    return;
+  }
+
   if (hasBroadcastDestination()) {
     startBroadcasting();
   }
@@ -189,9 +202,41 @@ async function copyRawModelOutput() {
 }
 
 function redrawStage() {
+  syncViewerStageAspectRatio();
   resizeOverlay();
   drawOverlay();
   renderRoiEditor();
+}
+
+async function pollDetectorResults() {
+  if (appState.streamMode !== "iframe") {
+    return;
+  }
+
+  try {
+    const response = await fetch("/detector/latest", {
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      return;
+    }
+
+    const payload = await response.json();
+
+    if (!payload?.payload || !payload?.updatedAt) {
+      return;
+    }
+
+    if (payload.updatedAt === lastDetectorUpdatedAt) {
+      return;
+    }
+
+    lastDetectorUpdatedAt = payload.updatedAt;
+    applyExternalDetections(payload.payload);
+  } catch {
+    // Ignore detector polling failures and keep the current UI state.
+  }
 }
 
 function bindEvents() {
@@ -286,6 +331,10 @@ function applyDefaults() {
     els.intervalInput.value = String(DEFAULT_INTERVAL_MS);
   }
 
+  if (els.frameSkipInput) {
+    els.frameSkipInput.value = String(DEFAULT_DETECT_EVERY_NTH_FRAME);
+  }
+
   initBroadcasting();
 
   if (els.broadcastUrlInput) {
@@ -334,8 +383,15 @@ function applyDefaults() {
 }
 
 function bindLifecycle() {
+  detectorPollTimer = window.setInterval(pollDetectorResults, DETECTOR_POLL_MS);
+
   window.addEventListener("beforeunload", () => {
     stopDetection();
+
+    if (detectorPollTimer) {
+      window.clearInterval(detectorPollTimer);
+      detectorPollTimer = 0;
+    }
 
     if (resizeObserver) {
       resizeObserver.disconnect();

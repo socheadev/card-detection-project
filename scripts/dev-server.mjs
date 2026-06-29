@@ -95,6 +95,13 @@ const rabbitMqBroadcastState = {
   lastError: "",
 };
 
+const detectorState = {
+  lastPayload: null,
+  updatedAt: "",
+  totalReceived: 0,
+  lastError: "",
+};
+
 function normalizeTextField(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -635,6 +642,70 @@ async function handleLocalBroadcast(req, res, requestUrl) {
   });
 }
 
+async function handleDetectorResults(req, res, requestUrl) {
+  if (req.method === "OPTIONS") {
+    const headers = new Headers();
+    setCorsHeaders(headers);
+    writeHeaders(res, 204, headers);
+    res.end();
+    return;
+  }
+
+  const isLatestPath = requestUrl.pathname.endsWith("/latest");
+
+  if (isLatestPath && (req.method === "GET" || req.method === "HEAD")) {
+    const body = {
+      ok: true,
+      updatedAt: detectorState.updatedAt || null,
+      totalReceived: detectorState.totalReceived,
+      lastError: detectorState.lastError || null,
+      payload: detectorState.lastPayload,
+    };
+
+    if (req.method === "HEAD") {
+      const headers = new Headers({
+        "Content-Type": "application/json; charset=utf-8",
+      });
+      setCorsHeaders(headers);
+      writeHeaders(res, 200, headers);
+      res.end();
+      return;
+    }
+
+    sendJson(res, 200, body);
+    return;
+  }
+
+  if (req.method !== "POST") {
+    sendText(res, 405, "Method Not Allowed");
+    return;
+  }
+
+  const rawBody = await readRequestBuffer(req);
+  const rawText = rawBody.toString("utf8");
+
+  let payload;
+
+  try {
+    payload = rawText ? JSON.parse(rawText) : null;
+  } catch {
+    detectorState.lastError = "Detector payload must be valid JSON";
+    sendText(res, 400, detectorState.lastError);
+    return;
+  }
+
+  detectorState.lastPayload = payload;
+  detectorState.updatedAt = new Date().toISOString();
+  detectorState.totalReceived += 1;
+  detectorState.lastError = "";
+
+  sendJson(res, 200, {
+    ok: true,
+    updatedAt: detectorState.updatedAt,
+    totalReceived: detectorState.totalReceived,
+  });
+}
+
 async function handleStatic(req, res, requestUrl) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     sendText(res, 405, "Method Not Allowed");
@@ -704,6 +775,14 @@ const server = http.createServer(async (req, res) => {
     requestUrl.pathname === "/broadcast/local-test/latest"
   ) {
     await handleLocalBroadcast(req, res, requestUrl);
+    return;
+  }
+
+  if (
+    requestUrl.pathname === "/detector/results" ||
+    requestUrl.pathname === "/detector/latest"
+  ) {
+    await handleDetectorResults(req, res, requestUrl);
     return;
   }
 

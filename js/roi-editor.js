@@ -17,6 +17,7 @@ import {
   ROI_SLOT_OPTIONS,
   roiBoundsToReferencePixels,
   roiSlotValue,
+  runtimeView,
   updateRoiConfig,
   updateRoiSlotConfig,
 } from "./shared.js";
@@ -25,6 +26,34 @@ import { currentVisibleFrameRect } from "./render.js";
 const HANDLE_ORDER = ["nw", "ne", "sw", "se"];
 
 let interaction = null;
+
+function currentEditorSourceSize() {
+  const detectedWidth = Math.round(runtimeView.rawModelOutput?.frame?.width || 0);
+  const detectedHeight = Math.round(runtimeView.rawModelOutput?.frame?.height || 0);
+
+  if (detectedWidth && detectedHeight) {
+    return {
+      width: detectedWidth,
+      height: detectedHeight,
+    };
+  }
+
+  if (appState.streamMode === "iframe") {
+    const frameRect = els.remoteFrame?.getBoundingClientRect();
+
+    if (frameRect?.width && frameRect?.height) {
+      return {
+        width: Math.round(frameRect.width),
+        height: Math.round(frameRect.height),
+      };
+    }
+  }
+
+  return {
+    width: els.video?.videoWidth || 0,
+    height: els.video?.videoHeight || 0,
+  };
+}
 
 function renderRoiLabel(roi) {
   return `${roi} · slot ${roiSlotValue(roi)}`;
@@ -138,8 +167,7 @@ export function renderRoiEditor() {
   }
 
   const frameRect = currentVisibleFrameRect();
-  const videoWidth = els.video?.videoWidth || 0;
-  const videoHeight = els.video?.videoHeight || 0;
+  const { width: videoWidth, height: videoHeight } = currentEditorSourceSize();
 
   els.roiEditorOverlay.classList.add("is-enabled");
 
@@ -181,7 +209,7 @@ export function renderRoiEditor() {
 }
 
 function startInteraction(event) {
-  if (!appState.roiEditorEnabled || !els.video) {
+  if (!appState.roiEditorEnabled) {
     return;
   }
 
@@ -194,8 +222,7 @@ function startInteraction(event) {
   }
 
   const frameRect = currentVisibleFrameRect();
-  const videoWidth = els.video.videoWidth || 0;
-  const videoHeight = els.video.videoHeight || 0;
+  const { width: videoWidth, height: videoHeight } = currentEditorSourceSize();
 
   if (!frameRect || !videoWidth || !videoHeight) {
     return;

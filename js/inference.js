@@ -24,6 +24,8 @@ const ROI_CROP_PADDING = 24;
 
 let displayedByRoi = new Map();
 let cachedRoiBounds = null;
+let lastObservedVideoTime = -1;
+let observedVideoFrameCount = 0;
 
 function getRoiBounds(sourceWidth, sourceHeight) {
   if (
@@ -297,7 +299,6 @@ function buildBroadcastPayload(detections) {
   for (const detection of detections) {
     const card = {
       name: detection.label,
-      confidence: detection.score,
       slot: detection.roi ? roiSlotValue(detection.roi) : null,
     };
 
@@ -315,8 +316,8 @@ function buildBroadcastPayload(detections) {
     if (leftSlot !== rightSlot) {
       return leftSlot - rightSlot;
     }
-
-    return (right?.confidence || 0) - (left?.confidence || 0);
+    
+    return 0;
   };
 
   payload.player.sort(compareCards);
@@ -366,6 +367,87 @@ function isRecoverableFrameError(error) {
     message.includes("createImageBitmap") ||
     message.includes("Load a stream before starting detection")
   );
+}
+
+function normalizeExternalDetection(detection) {
+  return {
+    id: detection?.id || "",
+    label: detection?.label || "",
+    classId: Number.isFinite(detection?.classId) ? detection.classId : -1,
+    score: Number.isFinite(detection?.score) ? detection.score : 0,
+    objectness: Number.isFinite(detection?.objectness) ? detection.objectness : 0,
+    classScore: Number.isFinite(detection?.classScore) ? detection.classScore : 0,
+    x: Number.isFinite(detection?.x) ? detection.x : 0,
+    y: Number.isFinite(detection?.y) ? detection.y : 0,
+    width: Number.isFinite(detection?.width) ? detection.width : 0,
+    height: Number.isFinite(detection?.height) ? detection.height : 0,
+  };
+}
+
+export function applyExternalDetections(payload = {}) {
+  const sourceWidth = Math.round(payload?.frame?.width || 0);
+  const sourceHeight = Math.round(payload?.frame?.height || 0);
+
+  if (!sourceWidth || !sourceHeight) {
+    return false;
+  }
+
+  const rawDetections = Array.isArray(payload?.detections)
+    ? payload.detections.map(normalizeExternalDetection)
+    : [];
+  const roiBounds = getRoiBounds(sourceWidth, sourceHeight);
+  const { matchedDetections, unmatchedDetections } = matchDetectionsToRois(
+    rawDetections,
+    roiBounds,
+  );
+  const { displayedDetections, resetTriggered } =
+    nextDisplayedDetections(matchedDetections);
+  const broadcastPayload = buildBroadcastPayload(displayedDetections);
+
+  if (hasPayloadCards(broadcastPayload)) {
+    queueBroadcastPayload(broadcastPayload);
+  }
+
+  appState.lastRunAt = performance.now();
+
+  applyRuntimeView(
+    buildRuntimeView({
+      rawDetections,
+      matchedDetections,
+      displayedDetections,
+      rawModelOutput: {
+        ...(payload.rawModelOutput || {}),
+        inferenceMode: "puppeteer-screenshot",
+        frame: {
+          width: sourceWidth,
+          height: sourceHeight,
+        },
+        capturedAt: payload.capturedAt || null,
+        roiBounds,
+        rawDetectionCount: rawDetections.length,
+        matchedDetectionCount: matchedDetections.length,
+        unmatchedDetectionCount: unmatchedDetections.length,
+        displayedDetectionCount: displayedDetections.length,
+        rawDetectionsPreview: detectionPreview(rawDetections),
+        displayedDetectionsPreview: detectionPreview(displayedDetections),
+      },
+      lastInferenceMs: Number.isFinite(payload.inferenceMs) ? payload.inferenceMs : 0,
+      lastPostprocessMs: Number.isFinite(payload.postprocessMs) ? payload.postprocessMs : 0,
+      lastTotalMs: Number.isFinite(payload.totalMs) ? payload.totalMs : 0,
+      debugText:
+        `screenshot ${sourceWidth}x${sourceHeight}` +
+        ` raw ${rawDetections.length}` +
+        ` matched ${matchedDetections.length}` +
+        ` displayed ${displayedDetections.length}`,
+    }),
+  );
+
+  if (resetTriggered) {
+    emitStatusChanged("Display reset. Detection still running");
+  }
+
+  emitRuntimeViewChanged();
+  return true;
 }
 
 async function runInferenceFrame(sessionId) {
@@ -457,6 +539,8 @@ export function stopDetection() {
   appState.lastRunAt = 0;
   appState.hideCardsUntilClear = false;
   cachedRoiBounds = null;
+  lastObservedVideoTime = -1;
+  observedVideoFrameCount = 0;
   clearDisplayedState();
 
   if (appState.animationFrameId) {
@@ -473,7 +557,7 @@ async function detectionLoop(sessionId) {
     return;
   }
 
-  const { intervalMs } = currentThresholds();
+  const { intervalMs, detectEveryNthFrame } = currentThresholds();
 
   if (
     appState.inferenceBusy ||
@@ -485,6 +569,21 @@ async function detectionLoop(sessionId) {
   }
 
   if (performance.now() - appState.lastRunAt < intervalMs) {
+    appState.animationFrameId = requestAnimationFrame(() => detectionLoop(sessionId));
+    return;
+  }
+
+  const currentVideoTime = els.video.currentTime;
+
+  if (!Number.isFinite(currentVideoTime) || currentVideoTime === lastObservedVideoTime) {
+    appState.animationFrameId = requestAnimationFrame(() => detectionLoop(sessionId));
+    return;
+  }
+
+  lastObservedVideoTime = currentVideoTime;
+  observedVideoFrameCount += 1;
+
+  if (((observedVideoFrameCount - 1) % detectEveryNthFrame) !== 0) {
     appState.animationFrameId = requestAnimationFrame(() => detectionLoop(sessionId));
     return;
   }
@@ -520,6 +619,13 @@ export async function startDetection() {
     return;
   }
 
+  if (appState.streamMode === "iframe") {
+    emitStatusChanged(
+      "Detection is unavailable for play.html sources because they load in a remote iframe.",
+    );
+    return;
+  }
+
   if (!appState.streamReady) {
     emitStatusChanged("Load a stream before starting detection");
     return;
@@ -530,6 +636,8 @@ export async function startDetection() {
 
     appState.detectionSessionId = sessionId;
     appState.startingDetection = true;
+    lastObservedVideoTime = -1;
+    observedVideoFrameCount = 0;
     emitStatusChanged("Starting detection...");
 
     if (els.video.paused) {

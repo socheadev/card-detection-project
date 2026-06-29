@@ -7,19 +7,10 @@ import {
   emitStatusChanged,
   resetRuntimeView,
 } from "./shared.js";
+import { syncViewerStageAspectRatio } from "./render.js";
 
 const VIDEO_READY_TIMEOUT_MS = 15000;
-const FIXED_STREAM_URL = DEFAULT_STREAM_URL;
-const PLAY_HTML_PLAYER_ONLY_PARAMS = new Set([
-  "autoplay",
-  "id",
-  "is360",
-  "mute",
-  "playOrder",
-  "playType",
-  "targetLatency",
-]);
-
+const FALLBACK_STREAM_URL = DEFAULT_STREAM_URL;
 function toBrowserPlayableSource(source) {
   const targetUrl = new URL(source);
   const proxyUrl = new URL("/proxy", window.location.href);
@@ -28,50 +19,35 @@ function toBrowserPlayableSource(source) {
   return proxyUrl.toString();
 }
 
-function buildPlayHtmlStreamQuery(url) {
-  const streamQuery = new URLSearchParams();
+function currentRequestedSource() {
+  return els.sourceInput?.value?.trim() || FALLBACK_STREAM_URL;
+}
 
-  for (const [key, value] of url.searchParams.entries()) {
-    if (!PLAY_HTML_PLAYER_ONLY_PARAMS.has(key)) {
-      streamQuery.append(key, value);
-    }
+function isRemoteHttpSource(url) {
+  return ["http:", "https:"].includes(url.protocol);
+}
+
+function toPlayableVideoSource(source) {
+  const targetUrl = new URL(source, window.location.href);
+
+  if (!isRemoteHttpSource(targetUrl)) {
+    return targetUrl.toString();
   }
 
-  const query = streamQuery.toString();
-  return query ? `?${query}` : "";
+  if (targetUrl.origin === window.location.origin) {
+    return targetUrl.toString();
+  }
+
+  return toBrowserPlayableSource(targetUrl.toString());
 }
 
-function buildPlayHtmlStreamSource(url, streamId, suffix = "") {
-  const basePath = url.pathname.split("/").slice(0, -1).join("/");
-  const query = buildPlayHtmlStreamQuery(url);
-
-  return `${url.protocol}//${url.host}${basePath}/streams/${streamId}${suffix}.m3u8${query}`;
-}
-
-async function sourceExists(source) {
+function isPlayHtmlSource(source) {
   try {
-    const response = await fetch(toBrowserPlayableSource(source), { method: "HEAD" });
-    return response.ok;
+    const url = new URL(source, window.location.href);
+    return url.pathname.endsWith("/play.html") && Boolean(url.searchParams.get("id"));
   } catch {
     return false;
   }
-}
-
-async function resolveFixedHlsSource() {
-  const url = new URL(FIXED_STREAM_URL);
-  const streamId = url.searchParams.get("id");
-
-  if (!streamId) {
-    throw new Error("The fixed play.html URL is missing ?id=...");
-  }
-
-  const adaptiveSource = buildPlayHtmlStreamSource(url, streamId, "_adaptive");
-
-  if (await sourceExists(adaptiveSource)) {
-    return adaptiveSource;
-  }
-
-  return buildPlayHtmlStreamSource(url, streamId);
 }
 
 function destroyHls() {
@@ -94,7 +70,7 @@ function setViewerMode(mode) {
     els.remoteFrame.hidden = mode === "video";
   }
 
-  const overlaysHidden = mode === "iframe";
+  const overlaysHidden = false;
 
   if (els.overlay) {
     els.overlay.hidden = overlaysHidden;
@@ -137,6 +113,7 @@ export function clearStream() {
   setViewerMode("video");
   resetRemoteFrame();
   resetVideoElement();
+  syncViewerStageAspectRatio();
   resetRuntimeView();
 
   emitRuntimeViewChanged();
@@ -269,7 +246,7 @@ async function playVideoIfPossible() {
   }
 }
 
-function waitForFrameLoad(frame) {
+function waitForFrameLoad(frame, source) {
   return new Promise((resolve, reject) => {
     let settled = false;
 
@@ -307,33 +284,50 @@ function waitForFrameLoad(frame) {
 
     frame.addEventListener("load", handleLoad, { once: true });
     frame.addEventListener("error", handleError, { once: true });
-    frame.src = FIXED_STREAM_URL;
+    frame.src = source;
   });
 }
 
 export async function loadStreamFromInput() {
-  if (!els.remoteFrame) {
-    emitStatusChanged("Direct play.html display is not available in this build.");
-    return false;
-  }
-
-  if (els.sourceInput) {
-    els.sourceInput.value = FIXED_STREAM_URL;
-  }
-
-  const resolvedSource = await resolveFixedHlsSource();
+  const requestedSource = currentRequestedSource();
+  const playHtmlSource = isPlayHtmlSource(requestedSource);
 
   clearStream();
-  setViewerMode("hybrid");
+  
+  if (playHtmlSource) {
+    if (!els.remoteFrame) {
+      emitStatusChanged("Remote player frame is not available in this build.");
+      return false;
+    }
+
+    setViewerMode("iframe");
+    syncViewerStageAspectRatio();
+    emitStatusChanged(`Loading stream: ${requestedSource}`);
+
+    try {
+      await waitForFrameLoad(els.remoteFrame, requestedSource);
+      emitRuntimeViewChanged();
+      emitOverlayInvalidated();
+      emitStatusChanged(
+        "Loaded original player at 16:9. ROI overlays stack on the visible player. Run `npm run detect:puppeteer` for screenshot-based detection.",
+      );
+      return true;
+    } catch (error) {
+      clearStream();
+      emitStatusChanged(`Could not load stream: ${error.message}`);
+      return false;
+    }
+  }
+
+  setViewerMode("video");
 
   els.video.crossOrigin = "anonymous";
   els.video.muted = true;
   els.video.playsInline = true;
 
-  emitStatusChanged(`Loading stream: ${FIXED_STREAM_URL}`);
+  emitStatusChanged(`Loading stream: ${requestedSource}`);
 
-  const playableSource = toBrowserPlayableSource(resolvedSource);
-  const frameLoadPromise = waitForFrameLoad(els.remoteFrame);
+  const playableSource = toPlayableVideoSource(requestedSource);
 
   if (!attachHlsSource(playableSource)) {
     if (canPlayNativeHls()) {
@@ -347,12 +341,12 @@ export async function loadStreamFromInput() {
   }
 
   try {
-    await Promise.all([waitForVideoReady(els.video), frameLoadPromise]);
+    await waitForVideoReady(els.video);
     appState.streamReady = true;
     emitOverlayInvalidated();
     emitRuntimeViewChanged();
     await playVideoIfPossible();
-    emitStatusChanged(`Loaded fixed stream: ${FIXED_STREAM_URL}`);
+    emitStatusChanged(`Loaded stream: ${requestedSource}`);
     return true;
   } catch (error) {
     clearStream();
