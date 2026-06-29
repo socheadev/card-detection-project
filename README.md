@@ -60,13 +60,11 @@ The outbound request body contains only the simplified detection objects, for ex
   "player": [
     {
       "name": "8S",
-      "class": 31,
       "confidence": 0.90323,
       "slot": 1
     },
     {
       "name": "8S",
-      "class": 31,
       "confidence": 0.84896,
       "slot": 2
     }
@@ -74,13 +72,11 @@ The outbound request body contains only the simplified detection objects, for ex
   "banker": [
     {
       "name": "4D",
-      "class": 13,
       "confidence": 0.83244,
       "slot": 1
     },
     {
       "name": "JD",
-      "class": 41,
       "confidence": 0.60589,
       "slot": 2
     }

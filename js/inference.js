@@ -19,6 +19,7 @@ const DISPLAY_REPLACEMENT_CONFIRM_FRAMES = 2;
 const DISPLAY_MISS_TOLERANCE_FRAMES = 3;
 const HIGH_CONFIDENCE_REPLACEMENT_SCORE = 0.9;
 const HIGH_CONFIDENCE_REPLACEMENT_DELTA = 0.12;
+const DEBUG_DETECTION_PREVIEW_LIMIT = 8;
 
 let displayedCardsState = [];
 let displayedCardsByRoi = new Map();
@@ -145,10 +146,15 @@ function formatDetectionForDebug(detection) {
   };
 }
 
+function detectionPreview(detections, limit = DEBUG_DETECTION_PREVIEW_LIMIT) {
+  return detections
+    .slice(0, limit)
+    .map(formatDetectionForDebug);
+}
+
 function formatBroadcastResult(detection) {
   return {
     name: detection.label,
-    class: detection.classId,
     confidence: detection.score,
     slot: detection.roi ? roiSlotValue(detection.roi) : null,
   };
@@ -389,10 +395,10 @@ async function runInferenceFrame(sessionId = appState.detectionSessionId) {
     matchedDetectionCount: matchedDetections.length,
     unmatchedDetectionCount: unmatchedDetections.length,
     displayedDetectionCount: stableDisplayedDetections.length,
-    rawDetections: frameResult.detections.map(formatDetectionForDebug),
-    matchedDetections: matchedDetections.map(formatDetectionForDebug),
-    unmatchedDetections: unmatchedDetections.map(formatDetectionForDebug),
-    displayedDetections: stableDisplayedDetections.map(formatDetectionForDebug),
+    rawDetectionsPreview: detectionPreview(frameResult.detections),
+    matchedDetectionsPreview: detectionPreview(matchedDetections),
+    unmatchedDetectionsPreview: detectionPreview(unmatchedDetections),
+    displayedDetectionsPreview: detectionPreview(stableDisplayedDetections),
   };
 
   if (hasBroadcastResults(broadcastPayload)) {
@@ -468,15 +474,7 @@ async function detectionLoop(sessionId = appState.detectionSessionId) {
   appState.inferenceBusy = true;
 
   try {
-    const updated = await runInferenceFrame(sessionId);
-
-    if (
-      updated !== false &&
-      appState.detecting &&
-      appState.detectionSessionId === sessionId
-    ) {
-      emitStatusChanged("Detection loop running");
-    }
+    await runInferenceFrame(sessionId);
   } catch (error) {
     if (appState.detectionSessionId === sessionId) {
       stopDetection();

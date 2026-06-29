@@ -3,7 +3,7 @@ export const DEFAULT_STREAM_URL = "https://venti.gpc123.com/Aesexy/play.html?id=
 export const DEFAULT_CONFIDENCE = 0.25;
 export const DEFAULT_IOU = 0.70;
 export const DEFAULT_INTERVAL_MS = 180;
-export const AUTO_LOAD_STREAM = true;
+export const AUTO_LOAD_STREAM = false;
 export const CARD_REVEAL_SCORE = 0.75;
 export const DEFAULT_RABBITMQ_URL = "https://rabbitmq.sclabproxserver.qzz.io";
 export const DEFAULT_RABBITMQ_VHOST = "/";

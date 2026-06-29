@@ -226,7 +226,7 @@ export function renderRawModelOutput(runtimeView) {
 
 function renderCardsMarkup(detections) {
   return detections
-    .map((detection, index) => {
+    .map((detection) => {
       const rawLabel = normalizedCardLabel(detection.label);
 
       if (!rawLabel) {
@@ -234,18 +234,7 @@ function renderCardsMarkup(detections) {
       }
 
       const label = escapeHtml(rawLabel);
-      const scorePercent = Math.round((detection.score || 0) * 100);
-      const title = `${label} (${scorePercent}%)`;
-      const imageMarkup = `<img class="cards-hand-image" src="${escapeHtml(cardAssetUrl(rawLabel))}" alt="${label}" />`;
-
-      return `
-        <figure class="cards-hand-card" data-card-index="${index}" data-state="stable" title="${escapeHtml(title)}">
-          ${imageMarkup}
-          <figcaption class="cards-hand-score">
-            ${label}
-          </figcaption>
-        </figure>
-      `;
+      return `<img class="cards-hand-image" src="${escapeHtml(cardAssetUrl(rawLabel))}" alt="${label}" width="52" height="73" decoding="async" />`;
     })
     .join("");
 }

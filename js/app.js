@@ -386,7 +386,6 @@ function bindEvents() {
 function bindPreviewEvents() {
   onPreviewEvent(PREVIEW_EVENTS.runtimeViewChanged, () => {
     renderDetectionUi();
-    redrawStage();
     syncDetectionControls();
   });
   onPreviewEvent(PREVIEW_EVENTS.overlayInvalidated, drawOverlay);

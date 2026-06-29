@@ -348,7 +348,7 @@ canvas {
   flex-direction: row;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   min-height: 0;
 }
 
@@ -360,23 +360,12 @@ canvas {
   justify-content: flex-end;
 }
 
-.cards-hand-card {
-  margin: 0;
-  display: grid;
-  justify-items: center;
-  gap: 6px;
-}
-
-.cards-hand-card[data-state="unstable"] {
-  opacity: 0.88;
-}
-
 .cards-hand-image {
-  width: 96px;
+  width: 52px;
   height: auto;
   display: block;
   object-fit: contain;
-  filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.28));
+  filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.22));
 }
 
 .cards-hand-image-placeholder {
@@ -394,25 +383,6 @@ canvas {
   font-weight: 800;
   line-height: 1;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-}
-
-.cards-hand-card[data-state="unstable"] .cards-hand-image {
-  filter:
-    drop-shadow(0 8px 18px rgba(0, 0, 0, 0.28))
-    drop-shadow(0 0 10px rgba(251, 191, 36, 0.75));
-}
-
-.cards-hand-score {
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: #ffffff;
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: 0.08em;
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
 }
 
 .controls-panel {
@@ -1071,7 +1041,7 @@ canvas {
   }
 
   .cards-hand-image {
-    width: 72px;
+    width: 44px;
   }
 
   .controls-panel {
