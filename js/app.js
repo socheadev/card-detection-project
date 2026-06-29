@@ -6,10 +6,6 @@ import {
   DEFAULT_DETECT_EVERY_NTH_FRAME,
   DEFAULT_INTERVAL_MS,
   DEFAULT_IOU,
-  DEFAULT_RABBITMQ_EXCHANGE,
-  DEFAULT_RABBITMQ_ROUTING_KEY,
-  DEFAULT_RABBITMQ_URL,
-  DEFAULT_RABBITMQ_VHOST,
   DEFAULT_STREAM_URL,
   MODEL_BADGE_IDLE_TEXT,
   RAW_MODEL_OUTPUT_IDLE_TEXT,
@@ -25,10 +21,6 @@ import {
 import {
   hasBroadcastDestination,
   initBroadcasting,
-  setRabbitMqConfig,
-  startBroadcasting,
-  setBroadcastTargetUrl,
-  toggleBroadcasting,
 } from "./broadcast.js";
 import {
   applyExternalDetections,
@@ -89,10 +81,6 @@ async function startAutoDetection() {
     return;
   }
 
-  if (hasBroadcastDestination()) {
-    startBroadcasting();
-  }
-
   await startDetection();
 }
 
@@ -132,14 +120,7 @@ function syncDetectionControls() {
   }
 }
 
-function syncBroadcastControls() {
-  if (els.toggleBroadcastBtn) {
-    els.toggleBroadcastBtn.textContent = appState.broadcastEnabled
-      ? "Stop Broadcast"
-      : "Start Broadcast";
-    els.toggleBroadcastBtn.dataset.state = appState.broadcastEnabled ? "ready" : "idle";
-  }
-}
+function syncBroadcastControls() {}
 
 async function writeTextToClipboard(text) {
   if (navigator.clipboard?.writeText) {
@@ -243,31 +224,7 @@ function bindEvents() {
   els.loadStreamBtn?.addEventListener("click", () => {
     reload(loadStreamFromInput);
   });
-  els.toggleBroadcastBtn?.addEventListener("click", () => {
-    toggleBroadcasting();
-    syncBroadcastControls();
-  });
   els.copyRawModelBtn?.addEventListener("click", copyRawModelOutput);
-  els.broadcastUrlInput?.addEventListener("input", (event) => {
-    setBroadcastTargetUrl(event.currentTarget?.value || "");
-    syncBroadcastControls();
-  });
-  els.rabbitmqUrlInput?.addEventListener("input", (event) => {
-    setRabbitMqConfig({ url: event.currentTarget?.value || "" });
-    syncBroadcastControls();
-  });
-  els.rabbitmqVhostInput?.addEventListener("input", (event) => {
-    setRabbitMqConfig({ vhost: event.currentTarget?.value || "" });
-    syncBroadcastControls();
-  });
-  els.rabbitmqExchangeInput?.addEventListener("input", (event) => {
-    setRabbitMqConfig({ exchange: event.currentTarget?.value || "" });
-    syncBroadcastControls();
-  });
-  els.rabbitmqRoutingKeyInput?.addEventListener("input", (event) => {
-    setRabbitMqConfig({ routingKey: event.currentTarget?.value || "" });
-    syncBroadcastControls();
-  });
 
   els.sourceInput?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
@@ -336,24 +293,6 @@ function applyDefaults() {
   }
 
   initBroadcasting();
-
-  if (els.broadcastUrlInput) {
-    els.broadcastUrlInput.value = appState.broadcastTargetUrl;
-  }
-  if (els.rabbitmqUrlInput) {
-    els.rabbitmqUrlInput.value = appState.rabbitmqUrl || DEFAULT_RABBITMQ_URL;
-  }
-  if (els.rabbitmqVhostInput) {
-    els.rabbitmqVhostInput.value = appState.rabbitmqVhost || DEFAULT_RABBITMQ_VHOST;
-  }
-  if (els.rabbitmqExchangeInput) {
-    els.rabbitmqExchangeInput.value =
-      appState.rabbitmqExchange || DEFAULT_RABBITMQ_EXCHANGE;
-  }
-  if (els.rabbitmqRoutingKeyInput) {
-    els.rabbitmqRoutingKeyInput.value =
-      appState.rabbitmqRoutingKey || DEFAULT_RABBITMQ_ROUTING_KEY;
-  }
 
   if (els.modelBadge) {
     els.modelBadge.textContent = MODEL_BADGE_IDLE_TEXT;

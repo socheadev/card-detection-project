@@ -4,6 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import amqp from "amqplib";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -55,6 +56,10 @@ function envValue(name, fallback = "") {
 const HOST = envValue("HOST", "localhost");
 const PORT = Number(envValue("PORT", 5500));
 const RABBITMQ_URL = envValue("RABBITMQ_URL", "");
+const RABBITMQ_AMQP_URL = envValue("RABBITMQ_AMQP_URL", "");
+const RABBITMQ_HOST = envValue("RABBITMQ_HOST", "");
+const RABBITMQ_PORT = Number(envValue("RABBITMQ_PORT", "5672"));
+const RABBITMQ_PROTOCOL = envValue("RABBITMQ_PROTOCOL", RABBITMQ_PORT === 5671 ? "amqps" : "amqp");
 const RABBITMQ_USERNAME = envValue("RABBITMQ_USERNAME", "");
 const RABBITMQ_PASSWORD = envValue("RABBITMQ_PASSWORD", "");
 const RABBITMQ_VHOST = envValue("RABBITMQ_VHOST", "/");
@@ -104,40 +109,162 @@ const detectorState = {
   lastError: "",
 };
 
+const rabbitMqAmqpState = {
+  connection: null,
+  channel: null,
+  connectionUrl: "",
+};
+
 function normalizeTextField(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function maskSecretUrl(value) {
+  if (!value) {
+    return "";
+  }
+
+  try {
+    const url = new URL(value);
+
+    if (url.password) {
+      url.password = "******";
+    }
+
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
+function buildAmqpConnectionUrl({ url, host, port, protocol, username, password, vhost }) {
+  if (url) {
+    return url;
+  }
+
+  if (!host || !username || !password) {
+    return "";
+  }
+
+  return (
+    `${protocol || "amqp"}://${encodeURIComponent(username)}:` +
+    `${encodeURIComponent(password)}@${host}:${port}/${encodeURIComponent(vhost || "/")}`
+  );
+}
+
+async function getRabbitMqAmqpChannel(connectionUrl) {
+  if (
+    rabbitMqAmqpState.channel &&
+    rabbitMqAmqpState.connection &&
+    rabbitMqAmqpState.connectionUrl === connectionUrl
+  ) {
+    return rabbitMqAmqpState.channel;
+  }
+
+  if (rabbitMqAmqpState.channel) {
+    try {
+      await rabbitMqAmqpState.channel.close();
+    } catch {
+      // Ignore close errors while switching connections.
+    }
+  }
+
+  if (rabbitMqAmqpState.connection) {
+    try {
+      await rabbitMqAmqpState.connection.close();
+    } catch {
+      // Ignore close errors while switching connections.
+    }
+  }
+
+  const connection = await amqp.connect(connectionUrl);
+  const channel = await connection.createChannel();
+
+  connection.on("error", () => {
+    rabbitMqAmqpState.connection = null;
+    rabbitMqAmqpState.channel = null;
+    rabbitMqAmqpState.connectionUrl = "";
+  });
+
+  connection.on("close", () => {
+    rabbitMqAmqpState.connection = null;
+    rabbitMqAmqpState.channel = null;
+    rabbitMqAmqpState.connectionUrl = "";
+  });
+
+  rabbitMqAmqpState.connection = connection;
+  rabbitMqAmqpState.channel = channel;
+  rabbitMqAmqpState.connectionUrl = connectionUrl;
+
+  return channel;
+}
+
+async function closeRabbitMqAmqpConnection() {
+  if (rabbitMqAmqpState.channel) {
+    try {
+      await rabbitMqAmqpState.channel.close();
+    } catch {
+      // Ignore close errors during shutdown.
+    }
+  }
+
+  if (rabbitMqAmqpState.connection) {
+    try {
+      await rabbitMqAmqpState.connection.close();
+    } catch {
+      // Ignore close errors during shutdown.
+    }
+  }
+
+  rabbitMqAmqpState.connection = null;
+  rabbitMqAmqpState.channel = null;
+  rabbitMqAmqpState.connectionUrl = "";
+}
+
 function emptyCardPayload() {
   return {
-    player: [],
-    banker: [],
+    player: {
+      card1: null,
+      card2: null,
+      card3: null,
+    },
+    banker: {
+      card1: null,
+      card2: null,
+      card3: null,
+    },
   };
 }
 
 function normalizeCardEntry(entry) {
-  return {
-    name: typeof entry?.name === "string" ? entry.name : "",
-    slot: Number.isFinite(entry?.slot) ? entry.slot : null,
-  };
-}
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
 
-function sortCardEntries(entries) {
-  return [...entries].sort((left, right) => {
-    const leftSlot = Number.isFinite(left?.slot) ? left.slot : Number.MAX_SAFE_INTEGER;
-    const rightSlot = Number.isFinite(right?.slot) ? right.slot : Number.MAX_SAFE_INTEGER;
-    return leftSlot - rightSlot;
-  });
+  const suit = typeof entry?.suit === "string" ? entry.suit : "";
+  const value = String(entry?.value ?? "").trim().toUpperCase();
+
+  if (!suit || !/^(10|[2-9AJQK])$/.test(value)) {
+    return null;
+  }
+
+  return { suit, value };
 }
 
 function normalizeCardPayload(payload) {
   const source = payload && typeof payload === "object" ? payload : {};
-  const player = Array.isArray(source.player) ? source.player : [];
-  const banker = Array.isArray(source.banker) ? source.banker : [];
+  const normalizeSide = (side) => {
+    const sourceSide = side && typeof side === "object" ? side : {};
+    return {
+      card1: normalizeCardEntry(sourceSide.card1),
+      card2: normalizeCardEntry(sourceSide.card2),
+      card3: normalizeCardEntry(sourceSide.card3),
+    };
+  };
 
   return {
-    player: sortCardEntries(player.map(normalizeCardEntry).filter((entry) => entry.name)),
-    banker: sortCardEntries(banker.map(normalizeCardEntry).filter((entry) => entry.name)),
+    player: normalizeSide(source.player),
+    banker: normalizeSide(source.banker),
   };
 }
 
@@ -145,27 +272,11 @@ function mergeCardPayload(previousPayload, nextPayload) {
   const previous = normalizeCardPayload(previousPayload);
   const next = normalizeCardPayload(nextPayload);
 
-  const mergeSide = (previousEntries, nextEntries) => {
-    const bySlot = new Map();
-
-    for (const entry of previousEntries) {
-      if (!Number.isFinite(entry.slot)) {
-        continue;
-      }
-
-      bySlot.set(entry.slot, entry);
-    }
-
-    for (const entry of nextEntries) {
-      if (!Number.isFinite(entry.slot)) {
-        continue;
-      }
-
-      bySlot.set(entry.slot, entry);
-    }
-
-    return sortCardEntries([...bySlot.values()]);
-  };
+  const mergeSide = (previousEntries, nextEntries) => ({
+    card1: nextEntries.card1 || previousEntries.card1 || null,
+    card2: nextEntries.card2 || previousEntries.card2 || null,
+    card3: nextEntries.card3 || previousEntries.card3 || null,
+  });
 
   return {
     player: mergeSide(previous.player, next.player),
@@ -505,86 +616,121 @@ async function handleRabbitMqBroadcast(req, res) {
   const exchange = normalizeTextField(rabbitmq.exchange) || RABBITMQ_EXCHANGE;
   const routingKey =
     normalizeTextField(rabbitmq.routingKey) || RABBITMQ_ROUTING_KEY;
+  const amqpConnectionUrl = buildAmqpConnectionUrl({
+    url: normalizeTextField(rabbitmq.amqpUrl) || RABBITMQ_AMQP_URL,
+    host: normalizeTextField(rabbitmq.host) || RABBITMQ_HOST,
+    port: Number(rabbitmq.port) || RABBITMQ_PORT,
+    protocol: normalizeTextField(rabbitmq.protocol) || RABBITMQ_PROTOCOL,
+    username,
+    password,
+    vhost,
+  });
+  const usingHttpApi = Boolean(baseUrl);
+  const usingAmqp = Boolean(amqpConnectionUrl);
 
-  if (!baseUrl || !username || !password || !exchange || !routingKey) {
+  if ((!usingHttpApi && !usingAmqp) || !username || !password || !exchange || !routingKey) {
     sendText(
       res,
       400,
-      "RabbitMQ config requires url, username, password, exchange, and routingKey. Set them in env or request body.",
+      "RabbitMQ config requires either RABBITMQ_URL or RABBITMQ_AMQP_URL plus username, password, exchange, and routingKey.",
     );
     return;
   }
+  let publishUrl = "";
+  let routed = true;
 
-  let publishUrl;
+  if (usingHttpApi) {
+    try {
+      publishUrl = rabbitMqPublishUrl(baseUrl, vhost, exchange);
+    } catch {
+      sendText(res, 400, "RabbitMQ URL is invalid");
+      return;
+    }
 
-  try {
-    publishUrl = rabbitMqPublishUrl(baseUrl, vhost, exchange);
-  } catch {
-    sendText(res, 400, "RabbitMQ URL is invalid");
-    return;
-  }
+    const publishBody = {
+      properties: {},
+      routing_key: routingKey,
+      payload: JSON.stringify(payload),
+      payload_encoding: "string",
+    };
 
-  const publishBody = {
-    properties: {},
-    routing_key: routingKey,
-    payload: JSON.stringify(payload),
-    payload_encoding: "string",
-  };
+    let upstreamResponse;
 
-  let upstreamResponse;
+    try {
+      upstreamResponse = await fetch(publishUrl, {
+        method: "POST",
+        headers: {
+          Authorization:
+            `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(publishBody),
+        redirect: "follow",
+      });
+    } catch (error) {
+      rabbitMqBroadcastState.lastError = `RabbitMQ publish failed: ${error.message}`;
+      rabbitMqBroadcastState.publishUrl = publishUrl;
+      sendText(res, 502, `RabbitMQ publish failed: ${error.message}`);
+      return;
+    }
 
-  try {
-    upstreamResponse = await fetch(publishUrl, {
-      method: "POST",
-      headers: {
-        Authorization:
-          `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(publishBody),
-      redirect: "follow",
-    });
-  } catch (error) {
-    rabbitMqBroadcastState.lastError = `RabbitMQ publish failed: ${error.message}`;
-    rabbitMqBroadcastState.publishUrl = publishUrl;
-    sendText(res, 502, `RabbitMQ publish failed: ${error.message}`);
-    return;
-  }
+    const responseText = await upstreamResponse.text();
 
-  const responseText = await upstreamResponse.text();
+    if (!upstreamResponse.ok) {
+      rabbitMqBroadcastState.lastError =
+        responseText || `RabbitMQ publish request failed with HTTP ${upstreamResponse.status}`;
+      rabbitMqBroadcastState.publishUrl = publishUrl;
+      sendText(
+        res,
+        upstreamResponse.status,
+        responseText || "RabbitMQ publish request failed",
+        upstreamResponse.headers.get("content-type") || "text/plain; charset=utf-8",
+      );
+      return;
+    }
 
-  if (!upstreamResponse.ok) {
-    rabbitMqBroadcastState.lastError =
-      responseText || `RabbitMQ publish request failed with HTTP ${upstreamResponse.status}`;
-    rabbitMqBroadcastState.publishUrl = publishUrl;
-    sendText(
-      res,
-      upstreamResponse.status,
-      responseText || "RabbitMQ publish request failed",
-      upstreamResponse.headers.get("content-type") || "text/plain; charset=utf-8",
-    );
-    return;
-  }
+    let responseJson = null;
 
-  let responseJson = null;
+    try {
+      responseJson = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      responseJson = null;
+    }
 
-  try {
-    responseJson = responseText ? JSON.parse(responseText) : null;
-  } catch {
-    responseJson = null;
-  }
+    if (responseJson && responseJson.routed === false) {
+      rabbitMqBroadcastState.lastError = "RabbitMQ accepted the request but did not route it";
+      rabbitMqBroadcastState.publishUrl = publishUrl;
+      rabbitMqBroadcastState.routed = false;
+      sendJson(res, 502, {
+        ok: false,
+        routed: false,
+        publishUrl,
+        rabbitmqResponse: responseJson,
+      });
+      return;
+    }
 
-  if (responseJson && responseJson.routed === false) {
-    rabbitMqBroadcastState.lastError = "RabbitMQ accepted the request but did not route it";
-    rabbitMqBroadcastState.publishUrl = publishUrl;
-    rabbitMqBroadcastState.routed = false;
-    sendJson(res, 502, {
-      ok: false,
-      routed: false,
-      publishUrl,
-      rabbitmqResponse: responseJson,
-    });
-    return;
+    routed = responseJson?.routed ?? true;
+  } else {
+    publishUrl = `${maskSecretUrl(amqpConnectionUrl)} -> ${exchange}:${routingKey}`;
+
+    try {
+      const channel = await getRabbitMqAmqpChannel(amqpConnectionUrl);
+      channel.publish(
+        exchange,
+        routingKey,
+        Buffer.from(JSON.stringify(payload)),
+        {
+          contentType: "application/json",
+          deliveryMode: 2,
+        },
+      );
+    } catch (error) {
+      rabbitMqBroadcastState.lastError = `RabbitMQ AMQP publish failed: ${error.message}`;
+      rabbitMqBroadcastState.publishUrl = publishUrl;
+      sendText(res, 502, `RabbitMQ AMQP publish failed: ${error.message}`);
+      return;
+    }
   }
 
   const normalizedPayload = normalizeCardPayload(payload);
@@ -598,7 +744,7 @@ async function handleRabbitMqBroadcast(req, res) {
   rabbitMqBroadcastState.publishedAt = new Date().toISOString();
   rabbitMqBroadcastState.totalPublished += 1;
   rabbitMqBroadcastState.publishUrl = publishUrl;
-  rabbitMqBroadcastState.routed = responseJson?.routed ?? true;
+  rabbitMqBroadcastState.routed = routed;
   rabbitMqBroadcastState.lastError = "";
 
   console.log(
@@ -608,7 +754,7 @@ async function handleRabbitMqBroadcast(req, res) {
 
   sendJson(res, 200, {
     ok: true,
-    routed: responseJson?.routed ?? true,
+    routed,
     publishUrl,
   });
 }
@@ -854,6 +1000,16 @@ const server = http.createServer(async (req, res) => {
   }
 
   await handleStatic(req, res, requestUrl);
+});
+
+process.on("SIGINT", async () => {
+  await closeRabbitMqAmqpConnection();
+  server.close(() => process.exit(0));
+});
+
+process.on("SIGTERM", async () => {
+  await closeRabbitMqAmqpConnection();
+  server.close(() => process.exit(0));
 });
 
 server.listen(PORT, HOST, () => {

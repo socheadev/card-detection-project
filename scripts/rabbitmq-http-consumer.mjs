@@ -100,18 +100,23 @@ function parseJsonIfPossible(value) {
 }
 
 function summarizeCards(cards) {
-  if (!Array.isArray(cards) || cards.length === 0) {
+  if (!cards || typeof cards !== "object") {
     return "-";
   }
 
-  return cards
-    .map((card) => {
-      const name = typeof card?.name === "string" ? card.name : "?";
-      const slot = Number.isFinite(card?.slot) ? `#${card.slot}` : "#?";
-      const confidence = Number.isFinite(card?.confidence)
-        ? ` ${(card.confidence * 100).toFixed(1)}%`
-        : "";
-      return `${slot} ${name}${confidence}`;
+  const entries = ["card1", "card2", "card3"]
+    .map((key) => [key, cards[key]])
+    .filter(([, card]) => card && typeof card === "object");
+
+  if (entries.length === 0) {
+    return "-";
+  }
+
+  return entries
+    .map(([key, card]) => {
+      const suit = typeof card?.suit === "string" ? card.suit : "?";
+      const value = String(card?.value ?? "").trim().toUpperCase() || "?";
+      return `${key} ${suit}:${value}`;
     })
     .join(", ");
 }
@@ -230,8 +235,12 @@ while (!stopped) {
       continue;
     }
 
-    const playerCards = Array.isArray(parsedBody.player) ? parsedBody.player : [];
-    const bankerCards = Array.isArray(parsedBody.banker) ? parsedBody.banker : [];
+    const playerCards = parsedBody.player && typeof parsedBody.player === "object"
+      ? parsedBody.player
+      : {};
+    const bankerCards = parsedBody.banker && typeof parsedBody.banker === "object"
+      ? parsedBody.banker
+      : {};
     const resultCards = Array.isArray(parsedBody.results) ? parsedBody.results : [];
 
     console.log(`PLAYER ${summarizeCards(playerCards)}`);

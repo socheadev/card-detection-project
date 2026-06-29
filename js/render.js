@@ -74,6 +74,110 @@ function formatDetection(detection) {
   };
 }
 
+function emptyCardPayload() {
+  return {
+    player: {
+      card1: null,
+      card2: null,
+      card3: null,
+    },
+    banker: {
+      card1: null,
+      card2: null,
+      card3: null,
+    },
+  };
+}
+
+function normalizeCardPayloadValue(value) {
+  const normalized = String(value ?? "").trim().toUpperCase();
+
+  return /^(10|[2-9AJQK])$/.test(normalized) ? normalized : null;
+}
+
+function normalizeCardPayloadEntry(entry) {
+  const suit = typeof entry?.suit === "string" ? entry.suit : "";
+  const value = normalizeCardPayloadValue(entry?.value);
+
+  if (!suit || value === null) {
+    return null;
+  }
+
+  return {
+    suit,
+    value,
+  };
+}
+
+function normalizeCardPayload(source) {
+  const payload = emptyCardPayload();
+
+  for (const side of ["player", "banker"]) {
+    for (const slot of ["card1", "card2", "card3"]) {
+      payload[side][slot] = normalizeCardPayloadEntry(source?.[side]?.[slot]);
+    }
+  }
+
+  return payload;
+}
+
+function payloadValue(rank) {
+  const normalized = String(rank || "").trim().toUpperCase();
+
+  return /^(10|[2-9AJQK])$/.test(normalized) ? normalized : null;
+}
+
+function payloadCardFromLabel(label) {
+  const text = String(label || "").trim().toUpperCase();
+  const match = text.match(/^(10|[2-9AJQK])([CDHS])$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const SUIT_NAMES = {
+    C: "clubs",
+    D: "diamonds",
+    H: "hearts",
+    S: "spades",
+  };
+  const [, rank, suitCode] = match;
+  const suit = SUIT_NAMES[suitCode] || null;
+  const value = payloadValue(rank);
+
+  if (!suit || value === null) {
+    return null;
+  }
+
+  return {
+    suit,
+    value,
+  };
+}
+
+function payloadFromDisplayedDetections(displayedDetections) {
+  const payload = emptyCardPayload();
+
+  for (const detection of displayedDetections || []) {
+    const side = String(detection?.side || "").toUpperCase();
+    const slot = detection?.roi ? roiSlotValue(detection.roi) : null;
+    const card = payloadCardFromLabel(detection?.label);
+    const key = Number.isFinite(slot) ? `card${slot}` : "";
+
+    if (!key || !card) {
+      continue;
+    }
+
+    if (side === "PLAYER") {
+      payload.player[key] = card;
+    } else if (side === "BANKER") {
+      payload.banker[key] = card;
+    }
+  }
+
+  return payload;
+}
+
 export function formatCardGroupsForDisplay(payload) {
   const grouped = {
     player: [],
@@ -116,30 +220,18 @@ export function formatCardGroupsForDisplay(payload) {
 }
 
 function formatRawModelOutput(runtimeView) {
-  if (!runtimeView.rawModelOutput) {
+  if (!runtimeView.rawModelOutput && !(runtimeView.displayedDetections || []).length) {
     return "";
   }
 
-  const payload = {
-    player: [],
-    banker: [],
-  };
+  const hasStructuredPayload =
+    runtimeView.rawModelOutput?.player &&
+    runtimeView.rawModelOutput?.banker;
+  const payload = hasStructuredPayload
+    ? normalizeCardPayload(runtimeView.rawModelOutput)
+    : payloadFromDisplayedDetections(runtimeView.displayedDetections);
 
-  for (const detection of runtimeView.displayedDetections || []) {
-    const side = String(detection?.side || "").toUpperCase();
-    const entry = {
-      name: detection.label,
-      slot: detection.roi ? roiSlotValue(detection.roi) : null,
-    };
-
-    if (side === "PLAYER") {
-      payload.player.push(entry);
-    } else if (side === "BANKER") {
-      payload.banker.push(entry);
-    }
-  }
-
-  return formatCardGroupsForDisplay(payload);
+  return JSON.stringify(payload, null, 2);
 }
 
 function rawOutputDisplayKey(displayedDetections) {

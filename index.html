@@ -80,189 +80,166 @@
 
             <!-- MODEL -->
 
-            <div class="controls-section">
-              <strong class="controls-title"> Model </strong>
+            <div class="controls-section model-section">
+              <strong class="controls-title"> Detection Model </strong>
 
-              <div class="controls-stack">
-                <div class="control-row source-row">
-                  <label class="field source-field">
-                    <span>Broadcast URL</span>
+              <div class="model-workspace">
+                <div class="model-config-panel">
+                  <div class="model-section-head">
+                    <div>
+                      <p class="model-kicker">Detection Controls</p>
 
-                    <input
-                      id="broadcastUrlInput"
-                      type="text"
-                      spellcheck="false"
-                      placeholder="https://your-system.example/api/detections"
-                    />
-                  </label>
+                      <h2 class="model-section-title">Tune ROI and live inference</h2>
+                    </div>
 
-                  <div class="action-row">
-                    <button id="toggleBroadcastBtn" type="button" class="secondary">
-                      Start Broadcast
-                    </button>
+                    <p class="model-section-copy">
+                      Adjust the card boxes, confidence threshold, timing, and frame
+                      skipping for the live stream.
+                    </p>
                   </div>
-                </div>
 
-                <div class="broadcast-settings-grid">
-                  <label class="field">
-                    <span>RabbitMQ URL</span>
-
-                    <input
-                      id="rabbitmqUrlInput"
-                      type="text"
-                      spellcheck="false"
-                      placeholder="https://rabbitmq.example.com"
-                    />
-                  </label>
-
-                  <label class="field">
-                    <span>Vhost</span>
-
-                    <input
-                      id="rabbitmqVhostInput"
-                      type="text"
-                      spellcheck="false"
-                      placeholder="/"
-                    />
-                  </label>
-
-                  <label class="field">
-                    <span>Exchange</span>
-
-                    <input
-                      id="rabbitmqExchangeInput"
-                      type="text"
-                      spellcheck="false"
-                      placeholder="amq.direct"
-                    />
-                  </label>
-
-                  <label class="field">
-                    <span>Routing Key</span>
-
-                    <input
-                      id="rabbitmqRoutingKeyInput"
-                      type="text"
-                      spellcheck="false"
-                      placeholder="card.detection"
-                    />
-                  </label>
-                </div>
-
-                <div class="control-row model-thresholds">
-                  <div class="action-row">
+                  <div class="action-row model-toolbar">
                     <button id="toggleRoiEditorBtn" type="button" class="secondary">
-                      Edit Boxs
+                      Edit Boxes
                     </button>
 
                     <button id="loadRoiEditorBtn" type="button" class="secondary">
-                      Load Boxs
+                      Load Boxes
                     </button>
 
                     <button id="saveRoiEditorBtn" type="button" class="secondary">
-                      Save Boxs
+                      Save Boxes
                     </button>
 
                     <button id="resetRoiEditorBtn" type="button" class="ghost">
-                      Reset Boxs
+                      Reset Boxes
                     </button>
                   </div>
 
-                  <label class="field mini-field">
-                    <span>Confidence</span>
+                  <div class="model-settings-grid">
+                    <label class="field mini-field model-setting-field">
+                      <span>Confidence</span>
 
-                    <input
-                      id="confidenceInput"
-                      type="number"
-                      min="0.01"
-                      max="1"
-                      step="0.01"
-                      value="0.25"
-                    />
-                  </label>
+                      <input
+                        id="confidenceInput"
+                        type="number"
+                        min="0.01"
+                        max="1"
+                        step="0.01"
+                        value="0.25"
+                      />
+                    </label>
 
-                  <label class="field mini-field">
-                    <span>NMS IoU</span>
+                    <label class="field mini-field model-setting-field">
+                      <span>NMS IoU</span>
 
-                    <input
-                      id="iouInput"
-                      type="number"
-                      min="0.01"
-                      max="1"
-                      step="0.01"
-                      value="0.70"
-                    />
-                  </label>
+                      <input
+                        id="iouInput"
+                        type="number"
+                        min="0.01"
+                        max="1"
+                        step="0.01"
+                        value="0.70"
+                      />
+                    </label>
 
-                  <label class="field mini-field">
-                    <span>Interval (ms)</span>
+                    <label class="field mini-field model-setting-field">
+                      <span>Interval (ms)</span>
 
-                    <input
-                      id="intervalInput"
-                      type="number"
-                      min="16"
-                      max="2000"
-                      step="1"
-                      value="180"
-                    />
-                  </label>
+                      <input
+                        id="intervalInput"
+                        type="number"
+                        min="16"
+                        max="2000"
+                        step="1"
+                        value="180"
+                      />
+                    </label>
 
-                  <label class="field mini-field">
-                    <span>Every Nth Frame</span>
+                    <label class="field mini-field model-setting-field">
+                      <span>Every Nth Frame</span>
 
-                    <input
-                      id="frameSkipInput"
-                      type="number"
-                      min="1"
-                      max="30"
-                      step="1"
-                      value="1"
-                    />
-                  </label>
-                </div>
-
-                <div
-                  id="roiInputsPanel"
-                  class="roi-inputs-panel"
-                  aria-live="polite"
-                ></div>
-              </div>
-
-              <div class="model-data-inline">
-                <div class="panel-head">
-                  <h2>Model Status</h2>
-
-                  <span id="modelBadge"> Not loaded </span>
-                </div>
-
-                <div class="metric-grid">
-                  <div class="metric metric-primary">
-                    <span class="metric-label"> Status </span>
-
-                    <strong id="statusText"> Waiting for stream </strong>
+                      <input
+                        id="frameSkipInput"
+                        type="number"
+                        min="1"
+                        max="30"
+                        step="1"
+                        value="1"
+                      />
+                    </label>
                   </div>
 
-                  <div class="metric metric-primary">
-                    <span class="metric-label"> Broadcast </span>
-
-                    <strong id="broadcastStatusValue"> Disabled </strong>
-                  </div>
+                  <div
+                    id="roiInputsPanel"
+                    class="roi-inputs-panel"
+                    aria-live="polite"
+                  ></div>
                 </div>
 
-                <div class="raw-model-panel">
-                  <div class="panel-head panel-head-compact">
-                    <h2>Raw Model Output</h2>
+                <div class="model-data-inline">
+                  <div class="model-status-hero">
+                    <div>
+                      <p class="model-kicker">Runtime</p>
 
-                    <button
-                      id="copyRawModelBtn"
-                      class="secondary raw-copy-btn"
-                      type="button"
-                    >
-                      Copy Data
-                    </button>
+                      <h2>Live Detection Status</h2>
+
+                      <p class="model-status-copy">
+                        Watch the detector state, RabbitMQ delivery, and the latest
+                        normalized card payload from the current frame.
+                      </p>
+                    </div>
+
+                    <span id="modelBadge" class="model-badge"> Not loaded </span>
                   </div>
 
-                  <pre id="rawModelOutput" class="raw-model-output"></pre>
+                  <div class="metric-grid model-metric-grid">
+                    <div class="metric metric-primary model-metric-card">
+                      <span class="metric-label"> Runtime Status </span>
+
+                      <strong id="statusText"> Waiting for stream </strong>
+
+                      <p class="metric-note">
+                        Current stream and detector readiness inside the browser app.
+                      </p>
+                    </div>
+
+                    <div class="metric metric-primary model-metric-card">
+                      <span class="metric-label"> Auto Broadcast </span>
+
+                      <strong id="broadcastStatusValue"> Disabled </strong>
+
+                      <p class="metric-note">
+                        Detection results publish automatically whenever a valid model
+                        payload is available.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div class="raw-model-panel">
+                    <div class="panel-head panel-head-compact raw-model-head">
+                      <div>
+                        <p class="model-kicker">Model Output</p>
+
+                        <h2>Latest Payload</h2>
+                      </div>
+
+                      <button
+                        id="copyRawModelBtn"
+                        class="secondary raw-copy-btn"
+                        type="button"
+                      >
+                        Copy JSON
+                      </button>
+                    </div>
+
+                    <p class="raw-model-note">
+                      Stable JSON view of the current player and banker cards, aligned to
+                      the broadcast payload format.
+                    </p>
+
+                    <pre id="rawModelOutput" class="raw-model-output"></pre>
+                  </div>
                 </div>
               </div>
             </div>

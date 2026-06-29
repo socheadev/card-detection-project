@@ -292,36 +292,65 @@ function detectionPreview(detections) {
 
 function buildBroadcastPayload(detections) {
   const payload = {
-    player: [],
-    banker: [],
+    player: {
+      card1: null,
+      card2: null,
+      card3: null,
+    },
+    banker: {
+      card1: null,
+      card2: null,
+      card3: null,
+    },
+  };
+
+  const SUIT_NAMES = {
+    C: "clubs",
+    D: "diamonds",
+    H: "hearts",
+    S: "spades",
+  };
+
+  const payloadValue = (rank) => {
+    const normalized = String(rank || "").trim().toUpperCase();
+
+    return /^(10|[2-9AJQK])$/.test(normalized) ? normalized : null;
+  };
+
+  const broadcastCardFromLabel = (label) => {
+    const text = String(label || "").trim().toUpperCase();
+    const match = text.match(/^(10|[2-9AJQK])([CDHS])$/);
+
+    if (!match) {
+      return null;
+    }
+
+    const [, rank, suitCode] = match;
+    const suit = SUIT_NAMES[suitCode] || null;
+    const value = payloadValue(rank);
+
+    if (!suit || value === null) {
+      return null;
+    }
+
+    return { suit, value };
   };
 
   for (const detection of detections) {
-    const card = {
-      name: detection.label,
-      slot: detection.roi ? roiSlotValue(detection.roi) : null,
-    };
+    const slot = detection.roi ? roiSlotValue(detection.roi) : null;
+    const card = broadcastCardFromLabel(detection.label);
+    const key = Number.isFinite(slot) ? `card${slot}` : "";
+
+    if (!key || !card) {
+      continue;
+    }
 
     if (detection.side === "PLAYER") {
-      payload.player.push(card);
+      payload.player[key] = card;
     } else if (detection.side === "BANKER") {
-      payload.banker.push(card);
+      payload.banker[key] = card;
     }
   }
-
-  const compareCards = (left, right) => {
-    const leftSlot = Number.isFinite(left?.slot) ? left.slot : Number.MAX_SAFE_INTEGER;
-    const rightSlot = Number.isFinite(right?.slot) ? right.slot : Number.MAX_SAFE_INTEGER;
-
-    if (leftSlot !== rightSlot) {
-      return leftSlot - rightSlot;
-    }
-    
-    return 0;
-  };
-
-  payload.player.sort(compareCards);
-  payload.banker.sort(compareCards);
 
   return payload;
 }
@@ -338,7 +367,10 @@ function buildBroadcastResults(detections) {
 }
 
 function hasPayloadCards(payload) {
-  return payload.player.length > 0 || payload.banker.length > 0;
+  const sideHasCards = (side) =>
+    Object.values(side || {}).some((card) => card && typeof card === "object");
+
+  return sideHasCards(payload.player) || sideHasCards(payload.banker);
 }
 
 function buildBroadcastMessage({
