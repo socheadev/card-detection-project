@@ -99,26 +99,81 @@ function parseJsonIfPossible(value) {
   }
 }
 
+const ANSI = {
+  reset: "\u001b[0m",
+  dim: "\u001b[2m",
+  bold: "\u001b[1m",
+  blue: "\u001b[34m",
+  cyan: "\u001b[36m",
+  green: "\u001b[32m",
+  magenta: "\u001b[35m",
+  red: "\u001b[31m",
+  yellow: "\u001b[33m",
+};
+
+const useColors =
+  Boolean(process.stdout?.isTTY) &&
+  !process.env.NO_COLOR &&
+  String(process.env.TERM || "").toLowerCase() !== "dumb";
+
+function colorize(text, color) {
+  if (!useColors || !color) {
+    return text;
+  }
+
+  return `${color}${text}${ANSI.reset}`;
+}
+
+function suitColor(suitCode) {
+  if (suitCode === "H") {
+    return ANSI.red;
+  }
+
+  if (suitCode === "D") {
+    return ANSI.magenta;
+  }
+
+  if (suitCode === "C") {
+    return ANSI.green;
+  }
+
+  if (suitCode === "S") {
+    return ANSI.cyan;
+  }
+
+  return "";
+}
+
 function summarizeCards(cards) {
-  if (!cards || typeof cards !== "object") {
-    return "-";
-  }
+  const source = cards && typeof cards === "object" ? cards : {};
+  const cardCode = (card) => {
+    if (!card || typeof card !== "object") {
+      return "--";
+    }
 
-  const entries = ["card1", "card2", "card3"]
-    .map((key) => [key, cards[key]])
-    .filter(([, card]) => card && typeof card === "object");
+    const value = String(card?.value ?? "").trim().toUpperCase();
+    const suit = String(card?.suit ?? "").trim().toLowerCase();
+    const suitCode =
+      suit === "clubs"
+        ? "C"
+        : suit === "diamonds"
+          ? "D"
+          : suit === "hearts"
+            ? "H"
+            : suit === "spades"
+              ? "S"
+              : "";
 
-  if (entries.length === 0) {
-    return "-";
-  }
+    return value && suitCode ? `${value}${suitCode}` : "--";
+  };
 
-  return entries
-    .map(([key, card]) => {
-      const suit = typeof card?.suit === "string" ? card.suit : "?";
-      const value = String(card?.value ?? "").trim().toUpperCase() || "?";
-      return `${key} ${suit}:${value}`;
+  return ["card1", "card2", "card3"]
+    .map((key) => {
+      const plainCode = cardCode(source[key]).padEnd(3, " ");
+      const color = suitColor(plainCode.trim().slice(-1));
+      return `${colorize(`${key}=`, ANSI.dim)}${colorize(plainCode, color)}`;
     })
-    .join(", ");
+    .join("  ");
 }
 
 const RABBITMQ_URL = envValue("RABBITMQ_URL", "");
@@ -227,7 +282,9 @@ while (!stopped) {
     const parsedBody = parseJsonIfPossible(body);
 
     console.log(
-      `[${new Date().toISOString()}] routing_key=${routingKey} content_type=${contentType}`,
+      `${colorize(`[${new Date().toISOString()}]`, ANSI.dim)} ` +
+        `${colorize(`routing_key=${routingKey || "-"}`, ANSI.cyan)} ` +
+        `${colorize(`content_type=${contentType || "-"}`, ANSI.dim)}`,
     );
 
     if (!parsedBody) {
@@ -243,14 +300,20 @@ while (!stopped) {
       : {};
     const resultCards = Array.isArray(parsedBody.results) ? parsedBody.results : [];
 
-    console.log(`PLAYER ${summarizeCards(playerCards)}`);
-    console.log(`BANKER ${summarizeCards(bankerCards)}`);
+    console.log(
+      `${colorize("PLAYER", `${ANSI.bold}${ANSI.blue}`)} ${summarizeCards(playerCards)}`,
+    );
+    console.log(
+      `${colorize("BANKER", `${ANSI.bold}${ANSI.yellow}`)} ${summarizeCards(bankerCards)}`,
+    );
 
     if (resultCards.length > 0) {
-      console.log(`RESULTS ${resultCards.length}`);
+      console.log(
+        `${colorize("RESULTS", `${ANSI.bold}${ANSI.cyan}`)} ${resultCards.length}`,
+      );
     }
 
-    console.log(JSON.stringify(parsedBody, null, 2));
+    console.log("");
   }
 
   await delay(RABBITMQ_HTTP_POLL_MS);

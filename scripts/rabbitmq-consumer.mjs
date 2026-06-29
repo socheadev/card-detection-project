@@ -85,6 +85,123 @@ function maskConnectionUrl(value) {
   }
 }
 
+function parseJsonIfPossible(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+const ANSI = {
+  reset: "\u001b[0m",
+  dim: "\u001b[2m",
+  bold: "\u001b[1m",
+  blue: "\u001b[34m",
+  cyan: "\u001b[36m",
+  green: "\u001b[32m",
+  magenta: "\u001b[35m",
+  red: "\u001b[31m",
+  yellow: "\u001b[33m",
+};
+
+const useColors =
+  Boolean(process.stdout?.isTTY) &&
+  !process.env.NO_COLOR &&
+  String(process.env.TERM || "").toLowerCase() !== "dumb";
+
+function colorize(text, color) {
+  if (!useColors || !color) {
+    return text;
+  }
+
+  return `${color}${text}${ANSI.reset}`;
+}
+
+function suitColor(suitCode) {
+  if (suitCode === "H") {
+    return ANSI.red;
+  }
+
+  if (suitCode === "D") {
+    return ANSI.magenta;
+  }
+
+  if (suitCode === "C") {
+    return ANSI.green;
+  }
+
+  if (suitCode === "S") {
+    return ANSI.cyan;
+  }
+
+  return "";
+}
+
+function cardCode(card) {
+  if (!card || typeof card !== "object") {
+    return "--";
+  }
+
+  const value = String(card?.value ?? "").trim().toUpperCase();
+  const suit = String(card?.suit ?? "").trim().toLowerCase();
+  const suitCode =
+    suit === "clubs"
+      ? "C"
+      : suit === "diamonds"
+        ? "D"
+        : suit === "hearts"
+          ? "H"
+          : suit === "spades"
+            ? "S"
+            : "";
+
+  return value && suitCode ? `${value}${suitCode}` : "--";
+}
+
+function summarizeSide(label, cards) {
+  const source = cards && typeof cards === "object" ? cards : {};
+  const parts = ["card1", "card2", "card3"].map(
+    (key) => {
+      const plainCode = cardCode(source[key]).padEnd(3, " ");
+      const color = suitColor(plainCode.trim().slice(-1));
+      return `${colorize(`${key}=`, ANSI.dim)}${colorize(plainCode, color)}`;
+    },
+  );
+
+  const sideLabelColor = label === "PLAYER" ? ANSI.blue : ANSI.yellow;
+  return `${colorize(label.padEnd(6, " "), `${ANSI.bold}${sideLabelColor}`)} ${parts.join("  ")}`;
+}
+
+function printFormattedMessage(message) {
+  const timestamp = new Date().toISOString();
+  const contentType = message?.properties?.contentType || "";
+  const routingKey = Array.isArray(message?.fields?.routingKey)
+    ? message.fields.routingKey.join(".")
+    : message?.fields?.routingKey || "";
+  const rawBody = message.content.toString();
+  const parsedBody = parseJsonIfPossible(rawBody);
+
+  console.log(
+    `${colorize(`[${timestamp}]`, ANSI.dim)} ` +
+      `${colorize(`routing_key=${routingKey || "-"}`, ANSI.cyan)} ` +
+      `${colorize(`content_type=${contentType || "-"}`, ANSI.dim)}`,
+  );
+
+  if (!parsedBody) {
+    console.log(rawBody);
+    return;
+  }
+
+  console.log(summarizeSide("PLAYER", parsedBody.player));
+  console.log(summarizeSide("BANKER", parsedBody.banker));
+  console.log("");
+}
+
 const RABBITMQ_URL = envValue("RABBITMQ_URL", "");
 const RABBITMQ_AMQP_URL = envValue("RABBITMQ_AMQP_URL", "");
 const RABBITMQ_HOST =
@@ -142,7 +259,7 @@ channel.consume(RABBITMQ_QUEUE, (message) => {
     return;
   }
 
-  console.log(`[${new Date().toISOString()}] ${message.content.toString()}`);
+  printFormattedMessage(message);
   channel.ack(message);
 });
 
