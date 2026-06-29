@@ -383,6 +383,7 @@ function hasPayloadCards(payload) {
 }
 
 function buildBroadcastMessage({
+  payloadDetections = [],
   displayedDetections,
   rawModelOutput,
   lastInferenceMs = 0,
@@ -390,7 +391,7 @@ function buildBroadcastMessage({
   lastTotalMs = 0,
   debugText = "",
 }) {
-  const payload = buildBroadcastPayload(displayedDetections);
+  const payload = buildBroadcastPayload(payloadDetections);
 
   return {
     payload,
@@ -495,6 +496,7 @@ export function applyExternalDetections(payload = {}) {
     displayedDetectionsPreview: detectionPreview(displayedDetections),
   };
   const broadcastMessage = buildBroadcastMessage({
+    payloadDetections: matchedDetections,
     displayedDetections,
     rawModelOutput: nextRawModelOutput,
     lastInferenceMs: Number.isFinite(payload.inferenceMs) ? payload.inferenceMs : 0,
@@ -585,6 +587,7 @@ async function runInferenceFrame(sessionId) {
     displayedDetectionsPreview: detectionPreview(displayedDetections),
   };
   const broadcastMessage = buildBroadcastMessage({
+    payloadDetections: matchedDetections,
     displayedDetections,
     rawModelOutput: nextRawModelOutput,
     lastInferenceMs: frameResult.inferenceMs,

@@ -798,10 +798,7 @@ async function handleRabbitMqBroadcast(req, res) {
   const normalizedPayload = normalizeCardPayload(payload);
 
   rabbitMqBroadcastState.lastPayload = normalizedPayload;
-  rabbitMqBroadcastState.retainedPayload = mergeCardPayload(
-    rabbitMqBroadcastState.retainedPayload || emptyCardPayload(),
-    normalizedPayload,
-  );
+  rabbitMqBroadcastState.retainedPayload = normalizedPayload;
   rabbitMqBroadcastState.lastRawModelOutput = rawModelOutput;
   rabbitMqBroadcastState.publishedAt = new Date().toISOString();
   rabbitMqBroadcastState.totalPublished += 1;
@@ -835,7 +832,7 @@ async function handleRabbitMqViewer(req, res) {
     return;
   }
 
-  const body = rabbitMqBroadcastState.retainedPayload || emptyCardPayload();
+  const body = rabbitMqBroadcastState.lastPayload || emptyCardPayload();
 
   if (req.method === "HEAD") {
     const headers = new Headers({
