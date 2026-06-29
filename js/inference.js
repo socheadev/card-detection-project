@@ -15,16 +15,88 @@ import {
 import { queueBroadcastPayload } from "./broadcast.js";
 import { loadModel, runModelInference } from "./model.js";
 
-const DISPLAY_REPLACEMENT_CONFIRM_FRAMES = 2;
-const DISPLAY_MISS_TOLERANCE_FRAMES = 3;
-const HIGH_CONFIDENCE_REPLACEMENT_SCORE = 0.9;
-const HIGH_CONFIDENCE_REPLACEMENT_DELTA = 0.12;
-const DEBUG_DETECTION_PREVIEW_LIMIT = 8;
+const DISPLAY_CONFIRM_FRAMES = 1;
+const DISPLAY_MISS_TOLERANCE = 1;
+const FAST_REPLACE_SCORE = 0.9;
+const FAST_REPLACE_DELTA = 0.12;
+const DEBUG_PREVIEW_LIMIT = 6;
+const ROI_CROP_PADDING = 24;
 
-let displayedCardsState = [];
-let displayedCardsByRoi = new Map();
+let displayedByRoi = new Map();
+let cachedRoiBounds = null;
 
-function centerInsideBounds(detection, bounds) {
+function getRoiBounds(sourceWidth, sourceHeight) {
+  if (
+    cachedRoiBounds &&
+    cachedRoiBounds.width === sourceWidth &&
+    cachedRoiBounds.height === sourceHeight
+  ) {
+    return cachedRoiBounds.bounds;
+  }
+
+  const bounds = Object.fromEntries(
+    ROI_ORDER.map((roi) => [roi, roiPixelBounds(roi, sourceWidth, sourceHeight)]),
+  );
+
+  cachedRoiBounds = {
+    width: sourceWidth,
+    height: sourceHeight,
+    bounds,
+  };
+
+  return bounds;
+}
+
+function getDetectionCropBounds(roiBounds, sourceWidth, sourceHeight) {
+  let minX = sourceWidth;
+  let minY = sourceHeight;
+  let maxX = 0;
+  let maxY = 0;
+
+  for (const roi of ROI_ORDER) {
+    const bounds = roiBounds[roi];
+
+    if (!bounds) {
+      continue;
+    }
+
+    minX = Math.min(minX, bounds.x);
+    minY = Math.min(minY, bounds.y);
+    maxX = Math.max(maxX, bounds.x + bounds.width);
+    maxY = Math.max(maxY, bounds.y + bounds.height);
+  }
+
+  const paddedX = Math.max(0, Math.floor(minX - ROI_CROP_PADDING));
+  const paddedY = Math.max(0, Math.floor(minY - ROI_CROP_PADDING));
+  const paddedRight = Math.min(sourceWidth, Math.ceil(maxX + ROI_CROP_PADDING));
+  const paddedBottom = Math.min(sourceHeight, Math.ceil(maxY + ROI_CROP_PADDING));
+
+  return {
+    x: paddedX,
+    y: paddedY,
+    width: Math.max(1, paddedRight - paddedX),
+    height: Math.max(1, paddedBottom - paddedY),
+  };
+}
+
+function offsetDetections(detections, cropBounds) {
+  return detections.map((detection) => ({
+    ...detection,
+    x: detection.x + cropBounds.x,
+    y: detection.y + cropBounds.y,
+  }));
+}
+
+function detectionOverlap(detection, bounds) {
+  const x1 = Math.max(detection.x, bounds.x);
+  const y1 = Math.max(detection.y, bounds.y);
+  const x2 = Math.min(detection.x + detection.width, bounds.x + bounds.width);
+  const y2 = Math.min(detection.y + detection.height, bounds.y + bounds.height);
+
+  return Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+}
+
+function detectionCenterInside(detection, bounds) {
   const centerX = detection.x + (detection.width / 2);
   const centerY = detection.y + (detection.height / 2);
 
@@ -36,194 +108,73 @@ function centerInsideBounds(detection, bounds) {
   );
 }
 
-function overlapArea(detection, bounds) {
-  const x1 = Math.max(detection.x, bounds.x);
-  const y1 = Math.max(detection.y, bounds.y);
-  const x2 = Math.min(detection.x + detection.width, bounds.x + bounds.width);
-  const y2 = Math.min(detection.y + detection.height, bounds.y + bounds.height);
-
-  return Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
-}
-
-function buildRoiCandidate(detection, bounds, roi, detectionIndex) {
-  const centerInside = centerInsideBounds(detection, bounds);
-  const intersection = overlapArea(detection, bounds);
-
-  if (!centerInside && !intersection) {
-    return null;
-  }
-
-  return {
-    ...detection,
-    roi,
-    side: ROI_SIDE[roi],
-    centerInside,
-    overlapArea: intersection,
-    detectionIndex,
-  };
-}
-
-function compareRoiCandidates(left, right) {
-  if (left.centerInside !== right.centerInside) {
-    return left.centerInside ? -1 : 1;
-  }
-
-  if (right.overlapArea !== left.overlapArea) {
-    return right.overlapArea - left.overlapArea;
-  }
-
-  return (right.score || 0) - (left.score || 0);
-}
-
-function assignDetectionsToRois(detections, roiBoundsByName) {
+function matchDetectionsToRois(detections, roiBounds) {
   const candidates = [];
 
   detections.forEach((detection, detectionIndex) => {
     for (const roi of ROI_ORDER) {
-      const bounds = roiBoundsByName[roi];
+      const bounds = roiBounds[roi];
 
       if (!bounds) {
         continue;
       }
 
-      const candidate = buildRoiCandidate(
-        detection,
-        bounds,
-        roi,
-        detectionIndex,
-      );
+      const centerInside = detectionCenterInside(detection, bounds);
+      const overlapArea = detectionOverlap(detection, bounds);
 
-      if (candidate) {
-        candidates.push(candidate);
+      if (!centerInside && !overlapArea) {
+        continue;
       }
+
+      candidates.push({
+        ...detection,
+        roi,
+        side: ROI_SIDE[roi],
+        centerInside,
+        overlapArea,
+        detectionIndex,
+      });
     }
   });
 
-  candidates.sort(compareRoiCandidates);
+  candidates.sort((left, right) => {
+    if (left.centerInside !== right.centerInside) {
+      return left.centerInside ? -1 : 1;
+    }
 
-  const matchedDetections = [];
-  const usedDetectionIndexes = new Set();
+    if (left.overlapArea !== right.overlapArea) {
+      return right.overlapArea - left.overlapArea;
+    }
+
+    return (right.score || 0) - (left.score || 0);
+  });
+
+  const matched = [];
+  const usedDetections = new Set();
   const usedRois = new Set();
 
   for (const candidate of candidates) {
     if (
-      usedDetectionIndexes.has(candidate.detectionIndex) ||
+      usedDetections.has(candidate.detectionIndex) ||
       usedRois.has(candidate.roi)
     ) {
       continue;
     }
 
-    usedDetectionIndexes.add(candidate.detectionIndex);
+    usedDetections.add(candidate.detectionIndex);
     usedRois.add(candidate.roi);
-    matchedDetections.push(candidate);
+    matched.push(candidate);
   }
 
-  const unmatchedDetections = detections.filter(
-    (_, detectionIndex) => !usedDetectionIndexes.has(detectionIndex),
-  );
-
   return {
-    matchedDetections,
-    unmatchedDetections,
+    matchedDetections: matched,
+    unmatchedDetections: detections.filter(
+      (_, detectionIndex) => !usedDetections.has(detectionIndex),
+    ),
   };
 }
 
-function formatDetectionForDebug(detection) {
-  return {
-    label: detection.label,
-    classId: detection.classId,
-    score: detection.score,
-    roi: detection.roi || null,
-    side: detection.side || null,
-    centerInside: Boolean(detection.centerInside),
-    overlapArea: detection.overlapArea || 0,
-    box: {
-      x1: detection.x,
-      y1: detection.y,
-      x2: detection.x + detection.width,
-      y2: detection.y + detection.height,
-    },
-  };
-}
-
-function detectionPreview(detections, limit = DEBUG_DETECTION_PREVIEW_LIMIT) {
-  return detections
-    .slice(0, limit)
-    .map(formatDetectionForDebug);
-}
-
-function formatBroadcastResult(detection) {
-  return {
-    name: detection.label,
-    confidence: detection.score,
-    slot: detection.roi ? roiSlotValue(detection.roi) : null,
-  };
-}
-
-function compareBroadcastResults(left, right) {
-  const leftSlot = Number.isFinite(left?.slot) ? left.slot : Number.MAX_SAFE_INTEGER;
-  const rightSlot = Number.isFinite(right?.slot) ? right.slot : Number.MAX_SAFE_INTEGER;
-
-  if (leftSlot !== rightSlot) {
-    return leftSlot - rightSlot;
-  }
-
-  return (right?.confidence || 0) - (left?.confidence || 0);
-}
-
-function groupedBroadcastResults(detections) {
-  const grouped = {
-    player: [],
-    banker: [],
-  };
-
-  for (const detection of detections) {
-    const result = formatBroadcastResult(detection);
-
-    if (detection.side === "PLAYER") {
-      grouped.player.push(result);
-      continue;
-    }
-
-    if (detection.side === "BANKER") {
-      grouped.banker.push(result);
-    }
-  }
-
-  grouped.player.sort(compareBroadcastResults);
-  grouped.banker.sort(compareBroadcastResults);
-
-  return grouped;
-}
-
-function buildBroadcastPayload(detections) {
-  const grouped = groupedBroadcastResults(detections);
-
-  return {
-    player: grouped.player,
-    banker: grouped.banker,
-  };
-}
-
-function hasBroadcastResults(payload) {
-  return (
-    (Array.isArray(payload?.player) && payload.player.length > 0) ||
-    (Array.isArray(payload?.banker) && payload.banker.length > 0)
-  );
-}
-
-function roiBoundsByName(sourceWidth, sourceHeight) {
-  return Object.fromEntries(
-    ROI_ORDER.map((roi) => [roi, roiPixelBounds(roi, sourceWidth, sourceHeight)]),
-  );
-}
-
-function clearDisplayedCardsState() {
-  displayedCardsState = [];
-  displayedCardsByRoi = new Map();
-}
-
-function sameDisplayedCard(left, right) {
+function sameCard(left, right) {
   return Boolean(
     left &&
       right &&
@@ -233,93 +184,149 @@ function sameDisplayedCard(left, right) {
   );
 }
 
-function buildDisplayState(previousState, detection) {
-  return {
-    displayed: detection || null,
-    candidate: null,
-    candidateHits: 0,
-    missCount: 0,
-  };
+function clearDisplayedState() {
+  displayedByRoi = new Map();
 }
 
-function nextDisplayedCards(frameDetections) {
-  const detectionsByRoi = new Map(
+function nextDisplayedDetections(frameDetections) {
+  const incomingByRoi = new Map(
     frameDetections
       .filter((detection) => detection?.roi)
       .map((detection) => [detection.roi, detection]),
   );
-  const nextStateByRoi = new Map();
-  const nextDisplayed = [];
+
+  const nextState = new Map();
+  const displayed = [];
   let resetTriggered = false;
 
   for (const roi of ROI_ORDER) {
-    const incoming = detectionsByRoi.get(roi) || null;
-    const previousState = displayedCardsByRoi.get(roi) || buildDisplayState(null, null);
-    const nextState = { ...previousState };
+    const previous = displayedByRoi.get(roi) || {
+      displayed: null,
+      candidate: null,
+      candidateHits: 0,
+      missCount: 0,
+    };
+    const incoming = incomingByRoi.get(roi) || null;
+    const state = { ...previous };
 
     if (!incoming) {
-      nextState.candidate = null;
-      nextState.candidateHits = 0;
+      state.candidate = null;
+      state.candidateHits = 0;
 
-      if (nextState.displayed) {
-        nextState.missCount += 1;
+      if (state.displayed) {
+        state.missCount += 1;
 
-        if (nextState.missCount <= DISPLAY_MISS_TOLERANCE_FRAMES) {
-          nextDisplayed.push(nextState.displayed);
-          nextStateByRoi.set(roi, nextState);
-          continue;
+        if (state.missCount <= DISPLAY_MISS_TOLERANCE) {
+          displayed.push(state.displayed);
+        } else {
+          state.displayed = null;
+          state.missCount = 0;
+          resetTriggered = true;
         }
-
-        nextState.displayed = null;
-        nextState.missCount = 0;
-        resetTriggered = true;
       }
 
-      nextStateByRoi.set(roi, nextState);
+      nextState.set(roi, state);
       continue;
     }
 
-    nextState.missCount = 0;
+    state.missCount = 0;
 
-    if (!nextState.displayed || sameDisplayedCard(nextState.displayed, incoming)) {
-      nextState.displayed = incoming;
-      nextState.candidate = null;
-      nextState.candidateHits = 0;
-      nextDisplayed.push(nextState.displayed);
-      nextStateByRoi.set(roi, nextState);
+    if (!state.displayed || sameCard(state.displayed, incoming)) {
+      state.displayed = incoming;
+      state.candidate = null;
+      state.candidateHits = 0;
+      displayed.push(state.displayed);
+      nextState.set(roi, state);
       continue;
     }
 
-    const previousCandidate = nextState.candidate;
-    const scoreDelta = (incoming.score || 0) - (nextState.displayed.score || 0);
+    const wasSameCandidate = sameCard(state.candidate, incoming);
+    const scoreDelta = (incoming.score || 0) - (state.displayed.score || 0);
 
-    nextState.candidate = incoming;
-    nextState.candidateHits = sameDisplayedCard(previousCandidate, incoming)
-      ? previousState.candidateHits + 1
-      : 1;
+    state.candidate = incoming;
+    state.candidateHits = wasSameCandidate ? state.candidateHits + 1 : 1;
 
     if (
-      nextState.candidateHits >= DISPLAY_REPLACEMENT_CONFIRM_FRAMES ||
+      state.candidateHits >= DISPLAY_CONFIRM_FRAMES ||
       (
-        (incoming.score || 0) >= HIGH_CONFIDENCE_REPLACEMENT_SCORE &&
-        scoreDelta >= HIGH_CONFIDENCE_REPLACEMENT_DELTA
+        (incoming.score || 0) >= FAST_REPLACE_SCORE &&
+        scoreDelta >= FAST_REPLACE_DELTA
       )
     ) {
-      nextState.displayed = incoming;
-      nextState.candidate = null;
-      nextState.candidateHits = 0;
+      state.displayed = incoming;
+      state.candidate = null;
+      state.candidateHits = 0;
     }
 
-    nextDisplayed.push(nextState.displayed);
-    nextStateByRoi.set(roi, nextState);
+    if (state.displayed) {
+      displayed.push(state.displayed);
+    }
+
+    nextState.set(roi, state);
   }
 
-  displayedCardsByRoi = nextStateByRoi;
-  displayedCardsState = nextDisplayed.filter(Boolean);
+  displayedByRoi = nextState;
+
   return {
-    displayedDetections: displayedCardsState,
+    displayedDetections: displayed,
     resetTriggered,
   };
+}
+
+function detectionPreview(detections) {
+  return detections.slice(0, DEBUG_PREVIEW_LIMIT).map((detection) => ({
+    label: detection.label,
+    score: detection.score,
+    roi: detection.roi || null,
+    side: detection.side || null,
+    box: {
+      x1: detection.x,
+      y1: detection.y,
+      x2: detection.x + detection.width,
+      y2: detection.y + detection.height,
+    },
+  }));
+}
+
+function buildBroadcastPayload(detections) {
+  const payload = {
+    player: [],
+    banker: [],
+  };
+
+  for (const detection of detections) {
+    const card = {
+      name: detection.label,
+      confidence: detection.score,
+      slot: detection.roi ? roiSlotValue(detection.roi) : null,
+    };
+
+    if (detection.side === "PLAYER") {
+      payload.player.push(card);
+    } else if (detection.side === "BANKER") {
+      payload.banker.push(card);
+    }
+  }
+
+  const compareCards = (left, right) => {
+    const leftSlot = Number.isFinite(left?.slot) ? left.slot : Number.MAX_SAFE_INTEGER;
+    const rightSlot = Number.isFinite(right?.slot) ? right.slot : Number.MAX_SAFE_INTEGER;
+
+    if (leftSlot !== rightSlot) {
+      return leftSlot - rightSlot;
+    }
+
+    return (right?.confidence || 0) - (left?.confidence || 0);
+  };
+
+  payload.player.sort(compareCards);
+  payload.banker.sort(compareCards);
+
+  return payload;
+}
+
+function hasPayloadCards(payload) {
+  return payload.player.length > 0 || payload.banker.length > 0;
 }
 
 async function captureFrameBitmap(cropBounds = null) {
@@ -350,15 +357,22 @@ async function captureFrameBitmap(cropBounds = null) {
   }
 }
 
-async function runInferenceFrame(sessionId = appState.detectionSessionId) {
+function isRecoverableFrameError(error) {
+  const message = String(error?.message || error || "");
+
+  return (
+    message.includes("Video frame is not ready yet") ||
+    message.includes("The object is in an invalid state") ||
+    message.includes("createImageBitmap") ||
+    message.includes("Load a stream before starting detection")
+  );
+}
+
+async function runInferenceFrame(sessionId) {
   if (!appState.streamReady || appState.detectionSessionId !== sessionId) {
-    throw new Error("Load a stream before starting detection");
+    return false;
   }
 
-  await loadModel();
-
-  const thresholds = currentThresholds();
-  const startedAt = performance.now();
   const sourceWidth = els.video.videoWidth || 0;
   const sourceHeight = els.video.videoHeight || 0;
 
@@ -366,42 +380,34 @@ async function runInferenceFrame(sessionId = appState.detectionSessionId) {
     throw new Error("Video frame is not ready yet");
   }
 
-  const roiBounds = roiBoundsByName(sourceWidth, sourceHeight);
-  const frameBitmap = await captureFrameBitmap();
+  const thresholds = currentThresholds();
+  const startedAt = performance.now();
+  const roiBounds = getRoiBounds(sourceWidth, sourceHeight);
+  const detectionCropBounds = getDetectionCropBounds(
+    roiBounds,
+    sourceWidth,
+    sourceHeight,
+  );
+  const frameBitmap = await captureFrameBitmap(detectionCropBounds);
   const frameResult = await runModelInference(frameBitmap, thresholds);
+  const frameDetections = offsetDetections(
+    frameResult.detections,
+    detectionCropBounds,
+  );
 
   if (appState.detectionSessionId !== sessionId) {
     return false;
   }
 
-  const { matchedDetections, unmatchedDetections } = assignDetectionsToRois(
-    frameResult.detections,
+  const { matchedDetections, unmatchedDetections } = matchDetectionsToRois(
+    frameDetections,
     roiBounds,
   );
+  const { displayedDetections, resetTriggered } =
+    nextDisplayedDetections(matchedDetections);
+  const broadcastPayload = buildBroadcastPayload(displayedDetections);
 
-  const displayedDetections = matchedDetections;
-  const { displayedDetections: stableDisplayedDetections, resetTriggered } =
-    nextDisplayedCards(displayedDetections);
-  const broadcastPayload = buildBroadcastPayload(stableDisplayedDetections);
-
-  const rawModelOutput = {
-    ...frameResult.rawModelOutput,
-    workerPreprocessMs: frameResult.preprocessMs,
-    workerPostprocessMs: frameResult.workerPostprocessMs,
-    workerTotalMs: frameResult.totalWorkerMs,
-    inferenceMode: "full-frame-then-roi",
-    roiBounds,
-    rawDetectionCount: frameResult.detections.length,
-    matchedDetectionCount: matchedDetections.length,
-    unmatchedDetectionCount: unmatchedDetections.length,
-    displayedDetectionCount: stableDisplayedDetections.length,
-    rawDetectionsPreview: detectionPreview(frameResult.detections),
-    matchedDetectionsPreview: detectionPreview(matchedDetections),
-    unmatchedDetectionsPreview: detectionPreview(unmatchedDetections),
-    displayedDetectionsPreview: detectionPreview(stableDisplayedDetections),
-  };
-
-  if (hasBroadcastResults(broadcastPayload)) {
+  if (hasPayloadCards(broadcastPayload)) {
     queueBroadcastPayload(broadcastPayload);
   }
 
@@ -409,18 +415,29 @@ async function runInferenceFrame(sessionId = appState.detectionSessionId) {
 
   applyRuntimeView(
     buildRuntimeView({
-      rawDetections: frameResult.detections,
+      rawDetections: frameDetections,
       matchedDetections,
-      displayedDetections: stableDisplayedDetections,
-      rawModelOutput,
+      displayedDetections,
+      rawModelOutput: {
+        ...frameResult.rawModelOutput,
+        inferenceMode: "roi-union-crop",
+        roiBounds,
+        detectionCropBounds,
+        rawDetectionCount: frameDetections.length,
+        matchedDetectionCount: matchedDetections.length,
+        unmatchedDetectionCount: unmatchedDetections.length,
+        displayedDetectionCount: displayedDetections.length,
+        rawDetectionsPreview: detectionPreview(frameDetections),
+        displayedDetectionsPreview: detectionPreview(displayedDetections),
+      },
       lastInferenceMs: frameResult.inferenceMs,
       lastPostprocessMs: frameResult.workerPostprocessMs,
       lastTotalMs: appState.lastRunAt - startedAt,
       debugText:
-        `full-frame ${sourceWidth}x${sourceHeight}` +
-        ` raw ${frameResult.detections.length}` +
+        `roi-crop ${detectionCropBounds.width}x${detectionCropBounds.height}` +
+        ` raw ${frameDetections.length}` +
         ` matched ${matchedDetections.length}` +
-        ` displayed ${stableDisplayedDetections.length}`,
+        ` displayed ${displayedDetections.length}`,
     }),
   );
 
@@ -439,7 +456,8 @@ export function stopDetection() {
   appState.inferenceBusy = false;
   appState.lastRunAt = 0;
   appState.hideCardsUntilClear = false;
-  clearDisplayedCardsState();
+  cachedRoiBounds = null;
+  clearDisplayedState();
 
   if (appState.animationFrameId) {
     cancelAnimationFrame(appState.animationFrameId);
@@ -450,7 +468,7 @@ export function stopDetection() {
   emitRuntimeViewChanged();
 }
 
-async function detectionLoop(sessionId = appState.detectionSessionId) {
+async function detectionLoop(sessionId) {
   if (!appState.detecting || appState.detectionSessionId !== sessionId) {
     return;
   }
@@ -476,9 +494,10 @@ async function detectionLoop(sessionId = appState.detectionSessionId) {
   try {
     await runInferenceFrame(sessionId);
   } catch (error) {
-    if (appState.detectionSessionId === sessionId) {
+    if (appState.detectionSessionId === sessionId && !isRecoverableFrameError(error)) {
       stopDetection();
       emitStatusChanged(`Detection stopped: ${error.message}`);
+      return;
     }
   } finally {
     if (appState.detectionSessionId === sessionId) {
@@ -508,6 +527,7 @@ export async function startDetection() {
 
   try {
     const sessionId = appState.detectionSessionId + 1;
+
     appState.detectionSessionId = sessionId;
     appState.startingDetection = true;
     emitStatusChanged("Starting detection...");

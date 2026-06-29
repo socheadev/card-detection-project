@@ -2,9 +2,9 @@ export const DEFAULT_STREAM_URL = "https://venti.gpc123.com/Aesexy/play.html?id=
 
 export const DEFAULT_CONFIDENCE = 0.25;
 export const DEFAULT_IOU = 0.70;
-export const DEFAULT_INTERVAL_MS = 180;
+export const DEFAULT_INTERVAL_MS = 100;
 export const AUTO_LOAD_STREAM = false;
-export const CARD_REVEAL_SCORE = 0.75;
+export const CARD_REVEAL_SCORE = 0.80;
 export const DEFAULT_RABBITMQ_URL = "https://rabbitmq.sclabproxserver.qzz.io";
 export const DEFAULT_RABBITMQ_VHOST = "/";
 export const DEFAULT_RABBITMQ_EXCHANGE = "amq.direct";
@@ -229,16 +229,11 @@ export let ROI_SLOT_CONFIG =
 export const els = {
   sourceInput: document.querySelector("#sourceInput"),
   loadStreamBtn: document.querySelector("#loadStreamBtn"),
-  startDetectBtn: document.querySelector("#startDetectBtn"),
-  stopDetectBtn: document.querySelector("#stopDetectBtn"),
   broadcastUrlInput: document.querySelector("#broadcastUrlInput"),
   rabbitmqUrlInput: document.querySelector("#rabbitmqUrlInput"),
   rabbitmqVhostInput: document.querySelector("#rabbitmqVhostInput"),
   rabbitmqExchangeInput: document.querySelector("#rabbitmqExchangeInput"),
   rabbitmqRoutingKeyInput: document.querySelector("#rabbitmqRoutingKeyInput"),
-  rabbitmqViewerStatus: document.querySelector("#rabbitmqViewerStatus"),
-  rabbitmqViewerCount: document.querySelector("#rabbitmqViewerCount"),
-  rabbitmqViewerOutput: document.querySelector("#rabbitmqViewerOutput"),
   toggleBroadcastBtn: document.querySelector("#toggleBroadcastBtn"),
   toggleRoiEditorBtn: document.querySelector("#toggleRoiEditorBtn"),
   loadRoiEditorBtn: document.querySelector("#loadRoiEditorBtn"),

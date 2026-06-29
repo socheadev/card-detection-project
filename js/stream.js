@@ -261,10 +261,10 @@ function canPlayNativeHls() {
 async function playVideoIfPossible() {
   try {
     await els.video.play();
-    emitStatusChanged("Loaded stream. Press Start Detect.");
+    emitStatusChanged("Loaded stream. Detection will start automatically.");
   } catch (error) {
     emitStatusChanged(
-      `Loaded stream. Press Start Detect after playback is ready: ${error.message}`,
+      `Loaded stream. Detection will start after playback is ready: ${error.message}`,
     );
   }
 }

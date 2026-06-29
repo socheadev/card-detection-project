@@ -4,31 +4,50 @@ const ORT_WASM_BASE_URL = new URL(
   "../vendor/onnxruntime-web/",
   self.location.href,
 ).toString();
-const PRE_NMS_PREVIEW_LIMIT = 32;
 
-const workerState = {
+const state = {
   session: null,
   labels: [],
   inputSize: 0,
   inputName: "",
   outputName: "",
-  preprocessCanvas: null,
-  preprocessCtx: null,
   ortLoadPromise: null,
+  canvas: null,
+  ctx: null,
+  inputBuffer: null,
 };
-
-function wasmThreadCount() {
-  const hardwareConcurrency = self.navigator?.hardwareConcurrency || 1;
-
-  if (!self.crossOriginIsolated) {
-    return 1;
-  }
-
-  return Math.max(1, Math.min(4, hardwareConcurrency));
-}
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function threadsForWasm() {
+  const concurrency = self.navigator?.hardwareConcurrency || 1;
+  return self.crossOriginIsolated ? Math.max(1, Math.min(4, concurrency)) : 1;
+}
+
+function numberFromDim(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "bigint") {
+    const normalized = Number(value);
+    return Number.isFinite(normalized) ? normalized : 0;
+  }
+
+  if (typeof value === "string") {
+    const normalized = Number.parseInt(value, 10);
+    return Number.isFinite(normalized) ? normalized : 0;
+  }
+
+  if (value && typeof value === "object") {
+    return numberFromDim(
+      value.dimValue ?? value.value ?? value.dimension ?? value.size ?? 0,
+    );
+  }
+
+  return 0;
 }
 
 function ensureCanvas(size) {
@@ -36,55 +55,57 @@ function ensureCanvas(size) {
     throw new Error("OffscreenCanvas is not available in this browser");
   }
 
-  if (
-    !workerState.preprocessCanvas ||
-    workerState.preprocessCanvas.width !== size ||
-    workerState.preprocessCanvas.height !== size
-  ) {
-    workerState.preprocessCanvas = new OffscreenCanvas(size, size);
-    workerState.preprocessCtx = workerState.preprocessCanvas.getContext("2d", {
-      willReadFrequently: true,
-    });
+  if (!state.canvas || state.canvas.width !== size || state.canvas.height !== size) {
+    state.canvas = new OffscreenCanvas(size, size);
+    state.ctx = state.canvas.getContext("2d", { willReadFrequently: true });
   }
 
-  if (!workerState.preprocessCtx) {
+  if (!state.ctx) {
     throw new Error("Could not create a 2D context in the inference worker");
   }
 
-  return workerState.preprocessCtx;
+  return state.ctx;
 }
 
-async function ensureOrtLoaded() {
+function ensureInputBuffer(size) {
+  const requiredLength = size * size * 3;
+
+  if (!state.inputBuffer || state.inputBuffer.length !== requiredLength) {
+    state.inputBuffer = new Float32Array(requiredLength);
+  }
+
+  return state.inputBuffer;
+}
+
+async function ensureOrt() {
   if (self.ort) {
     return self.ort;
   }
 
-  if (workerState.ortLoadPromise) {
-    return workerState.ortLoadPromise;
+  if (!state.ortLoadPromise) {
+    state.ortLoadPromise = new Promise((resolve, reject) => {
+      try {
+        self.importScripts(`${ORT_WASM_BASE_URL}ort.min.js`);
+
+        if (!self.ort) {
+          throw new Error("onnxruntime-web did not initialize in the inference worker");
+        }
+
+        resolve(self.ort);
+      } catch (error) {
+        reject(error);
+      }
+    });
   }
 
-  workerState.ortLoadPromise = new Promise((resolve, reject) => {
-    try {
-      self.importScripts(`${ORT_WASM_BASE_URL}ort.min.js`);
-
-      if (!self.ort) {
-        throw new Error("onnxruntime-web did not initialize in the inference worker");
-      }
-
-      resolve(self.ort);
-    } catch (error) {
-      reject(error);
-    }
-  });
-
   try {
-    return await workerState.ortLoadPromise;
+    return await state.ortLoadPromise;
   } finally {
-    workerState.ortLoadPromise = null;
+    state.ortLoadPromise = null;
   }
 }
 
-async function fetchBinaryAsset(url) {
+async function fetchBinary(url) {
   const response = await fetch(url);
 
   if (!response.ok) {
@@ -94,11 +115,9 @@ async function fetchBinaryAsset(url) {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-function concatUint8Arrays(chunks, expectedSize = 0) {
-  const totalSize =
-    expectedSize || chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-
-  const combined = new Uint8Array(totalSize);
+function concatBytes(chunks, totalSize = 0) {
+  const size = totalSize || chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  const combined = new Uint8Array(size);
   let offset = 0;
 
   for (const chunk of chunks) {
@@ -109,7 +128,7 @@ function concatUint8Arrays(chunks, expectedSize = 0) {
   return combined;
 }
 
-async function fetchChunkedModelBytes(manifestUrl) {
+async function fetchChunkedModel(manifestUrl) {
   const response = await fetch(manifestUrl);
 
   if (!response.ok) {
@@ -126,135 +145,101 @@ async function fetchChunkedModelBytes(manifestUrl) {
     return null;
   }
 
-  const manifestBaseUrl = new URL("./", response.url);
+  const baseUrl = new URL("./", response.url);
   const chunks = await Promise.all(
     manifest.parts.map((part) => {
       if (!part?.path) {
         throw new Error("Invalid model manifest part");
       }
 
-      return fetchBinaryAsset(new URL(part.path, manifestBaseUrl).toString());
+      return fetchBinary(new URL(part.path, baseUrl).toString());
     }),
   );
 
-  return concatUint8Arrays(
+  return concatBytes(
     chunks,
     Number.isFinite(manifest.totalSize) ? manifest.totalSize : 0,
   );
 }
 
 async function fetchModelBytes(modelUrl, manifestUrl) {
-  const chunkedBytes = await fetchChunkedModelBytes(manifestUrl);
+  if (manifestUrl) {
+    const chunked = await fetchChunkedModel(manifestUrl);
 
-  if (chunkedBytes) {
-    return chunkedBytes;
+    if (chunked) {
+      return chunked;
+    }
   }
 
-  return fetchBinaryAsset(modelUrl);
+  return fetchBinary(modelUrl);
 }
 
-function extractLabelsFromOnnxBytes(bytes) {
-  const rawText = new TextDecoder("latin1").decode(bytes);
-  const namesIndex = rawText.indexOf("names");
+function extractLabels(modelBytes) {
+  const text = new TextDecoder("latin1").decode(modelBytes);
+  const index = text.indexOf("names");
 
-  if (namesIndex < 0) {
+  if (index < 0) {
     return [];
   }
 
-  const namesSlice = rawText.slice(namesIndex, namesIndex + 8192);
-  const namesMatch = namesSlice.match(/\{[^}]+\}/);
+  const match = text.slice(index, index + 8192).match(/\{[^}]+\}/);
 
-  if (!namesMatch) {
+  if (!match) {
     return [];
   }
 
   const labels = [];
 
-  for (const match of namesMatch[0].matchAll(/(\d+)\s*:\s*['"]([^'"]+)['"]/g)) {
-    const classId = Number.parseInt(match[1], 10);
-    const label = match[2]?.trim();
+  for (const entry of match[0].matchAll(/(\d+)\s*:\s*['"]([^'"]+)['"]/g)) {
+    const classId = Number.parseInt(entry[1], 10);
+    const label = entry[2]?.trim();
 
-    if (!Number.isFinite(classId) || !label) {
-      continue;
+    if (Number.isFinite(classId) && label) {
+      labels[classId] = label;
     }
-
-    labels[classId] = label;
   }
 
   return labels.filter(Boolean);
 }
 
-function extractInputSizeFromOnnxBytes(bytes) {
-  const rawText = new TextDecoder("latin1").decode(bytes);
-  const imgszIndex = rawText.indexOf("imgsz");
+function extractSquareInputSizeFromBytes(modelBytes) {
+  const text = new TextDecoder("latin1").decode(modelBytes);
+  const index = text.indexOf("imgsz");
 
-  if (imgszIndex < 0) {
+  if (index < 0) {
     return 0;
   }
 
-  const imgszSlice = rawText.slice(imgszIndex, imgszIndex + 256);
-  const imgszMatch =
-    imgszSlice.match(/\[(\d+)\s*,\s*(\d+)\]/) ||
-    imgszSlice.match(/(\d+)\s*,\s*(\d+)/);
+  const match =
+    text.slice(index, index + 256).match(/\[(\d+)\s*,\s*(\d+)\]/) ||
+    text.slice(index, index + 256).match(/(\d+)\s*,\s*(\d+)/);
 
-  if (!imgszMatch) {
+  if (!match) {
     return 0;
   }
 
-  const width = Number.parseInt(imgszMatch[1], 10);
-  const height = Number.parseInt(imgszMatch[2], 10);
+  const width = Number.parseInt(match[1], 10);
+  const height = Number.parseInt(match[2], 10);
 
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width !== height) {
-    return 0;
-  }
-
-  return width;
+  return width && width === height ? width : 0;
 }
 
-function normalizeDimension(value) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-
-  if (typeof value === "bigint") {
-    const normalized = Number(value);
-    return Number.isFinite(normalized) ? normalized : 0;
-  }
-
-  if (typeof value === "string") {
-    const normalized = Number.parseInt(value, 10);
-    return Number.isFinite(normalized) ? normalized : 0;
-  }
-
-  if (value && typeof value === "object") {
-    return normalizeDimension(
-      value.dimValue ?? value.value ?? value.dimension ?? value.size ?? 0,
-    );
-  }
-
-  return 0;
-}
-
-function extractInputSizeFromSession(session) {
+function extractSquareInputSizeFromSession(session) {
   const inputName = session.inputNames?.[0];
   const metadata = inputName ? session.inputMetadata?.[inputName] : null;
-  const dimensions = metadata?.dimensions || metadata?.dims || metadata?.shape || [];
+  const dims = metadata?.dimensions || metadata?.dims || metadata?.shape || [];
 
-  if (!Array.isArray(dimensions) || dimensions.length < 4) {
+  if (!Array.isArray(dims) || dims.length < 4) {
     return 0;
   }
 
-  const width = normalizeDimension(dimensions[dimensions.length - 1]);
-  const height = normalizeDimension(dimensions[dimensions.length - 2]);
+  const width = numberFromDim(dims[dims.length - 1]);
+  const height = numberFromDim(dims[dims.length - 2]);
 
-  if (!width || !height || width !== height) {
-    return 0;
-  }
-
-  return width;
+  return width && width === height ? width : 0;
 }
 
-async function createOrtSession(modelBytes) {
+async function createSession(modelBytes) {
   try {
     return await self.ort.InferenceSession.create(modelBytes, {
       executionProviders: ["webgpu", "wasm"],
@@ -269,41 +254,38 @@ async function createOrtSession(modelBytes) {
 }
 
 async function loadModel(payload = {}) {
-  if (workerState.session) {
+  if (state.session) {
     return {
-      labels: workerState.labels,
-      inputSize: workerState.inputSize,
+      labels: state.labels,
+      inputSize: state.inputSize,
     };
   }
 
-  const ort = await ensureOrtLoaded();
-  ort.env.wasm.numThreads = wasmThreadCount();
+  const ort = await ensureOrt();
+  ort.env.wasm.numThreads = threadsForWasm();
   ort.env.wasm.wasmPaths = ORT_WASM_BASE_URL;
 
-  const modelBytes = await fetchModelBytes(
-    payload.modelUrl,
-    payload.modelManifestUrl,
-  );
-  const labels = extractLabelsFromOnnxBytes(modelBytes);
+  const modelBytes = await fetchModelBytes(payload.modelUrl, payload.modelManifestUrl);
+  const labels = extractLabels(modelBytes);
 
   if (!labels.length) {
     throw new Error("Could not extract class labels from model data");
   }
 
-  const session = await createOrtSession(modelBytes);
+  const session = await createSession(modelBytes);
   const inputSize =
-    extractInputSizeFromSession(session) ||
-    extractInputSizeFromOnnxBytes(modelBytes);
+    extractSquareInputSizeFromSession(session) ||
+    extractSquareInputSizeFromBytes(modelBytes);
 
   if (!inputSize) {
     throw new Error("Could not extract a square input size from model data");
   }
 
-  workerState.session = session;
-  workerState.labels = labels;
-  workerState.inputSize = inputSize;
-  workerState.inputName = session.inputNames[0] || "";
-  workerState.outputName = session.outputNames[0] || "";
+  state.session = session;
+  state.labels = labels;
+  state.inputSize = inputSize;
+  state.inputName = session.inputNames?.[0] || "";
+  state.outputName = session.outputNames?.[0] || "";
 
   return {
     labels,
@@ -311,120 +293,29 @@ async function loadModel(payload = {}) {
   };
 }
 
-function describeOutputTensor(outputTensor) {
-  const dims = outputTensor.dims;
-  const data = outputTensor.data;
-  const classCount = workerState.labels.length;
-
-  let channelCount = 0;
-  let boxCount = 0;
-  let channelsFirst = true;
-
-  const validChannelCount = (value) =>
-    value === classCount + 4 || value === classCount + 5;
-
-  if (dims.length === 3) {
-    if (validChannelCount(dims[1])) {
-      channelCount = dims[1];
-      boxCount = dims[2];
-    } else if (validChannelCount(dims[2])) {
-      channelCount = dims[2];
-      boxCount = dims[1];
-      channelsFirst = false;
-    }
-  }
-
-  if (dims.length === 2) {
-    if (validChannelCount(dims[0])) {
-      channelCount = dims[0];
-      boxCount = dims[1];
-    } else if (validChannelCount(dims[1])) {
-      channelCount = dims[1];
-      boxCount = dims[0];
-      channelsFirst = false;
-    }
-  }
-
-  if (!channelCount || !boxCount) {
-    throw new Error(`Unsupported output shape: ${dims.join(" x ")}`);
-  }
-
-  return {
-    dims,
-    data,
-    classCount,
-    channelCount,
-    boxCount,
-    channelsFirst,
-    hasObjectness: channelCount === classCount + 5,
-  };
-}
-
-function valueAtOutput(layout, channel, boxIndex) {
-  if (layout.channelsFirst) {
-    return layout.data[channel * layout.boxCount + boxIndex];
-  }
-
-  return layout.data[boxIndex * layout.channelCount + channel];
-}
-
-function normalizeProbability(score) {
-  if (!Number.isFinite(score)) {
-    return 0;
-  }
-
-  return clamp(score, 0, 1);
-}
-
-function summarizeScores(layout, boxIndex, classOffset) {
-  let bestClass = -1;
-  let bestClassScore = Number.NEGATIVE_INFINITY;
-
-  for (let classIndex = 0; classIndex < layout.classCount; classIndex += 1) {
-    const score = normalizeProbability(
-      valueAtOutput(layout, classOffset + classIndex, boxIndex),
-    );
-
-    if (score > bestClassScore) {
-      bestClassScore = score;
-      bestClass = classIndex;
-    }
-  }
-
-  const objectness = layout.hasObjectness
-    ? normalizeProbability(valueAtOutput(layout, 4, boxIndex))
-    : 1;
-
-  return {
-    bestClass,
-    bestClassScore,
-    objectness,
-    confidence: objectness * bestClassScore,
-  };
-}
-
-function prepareInputTensor(imageBitmap) {
-  const size = workerState.inputSize;
-  const sourceWidth = imageBitmap.width || 0;
-  const sourceHeight = imageBitmap.height || 0;
+function prepareInput(imageBitmap) {
+  const size = state.inputSize;
+  const frameWidth = imageBitmap.width || 0;
+  const frameHeight = imageBitmap.height || 0;
 
   if (!size) {
     throw new Error("Model input size is not available");
   }
 
-  if (!sourceWidth || !sourceHeight) {
+  if (!frameWidth || !frameHeight) {
     throw new Error("Video frame is not ready yet");
   }
 
   const ctx = ensureCanvas(size);
+  const inputBuffer = ensureInputBuffer(size);
 
   ctx.clearRect(0, 0, size, size);
   ctx.fillStyle = "rgb(114, 114, 114)";
   ctx.fillRect(0, 0, size, size);
 
-  const scale = Math.min(size / sourceWidth, size / sourceHeight);
-  const drawWidth = Math.round(sourceWidth * scale);
-  const drawHeight = Math.round(sourceHeight * scale);
+  const scale = Math.min(size / frameWidth, size / frameHeight);
+  const drawWidth = Math.round(frameWidth * scale);
+  const drawHeight = Math.round(frameHeight * scale);
   const padX = Math.floor((size - drawWidth) / 2);
   const padY = Math.floor((size - drawHeight) / 2);
 
@@ -432,8 +323,8 @@ function prepareInputTensor(imageBitmap) {
     imageBitmap,
     0,
     0,
-    sourceWidth,
-    sourceHeight,
+    frameWidth,
+    frameHeight,
     padX,
     padY,
     drawWidth,
@@ -454,29 +345,92 @@ function prepareInputTensor(imageBitmap) {
     throw error;
   }
 
-  const planeSize = size * size;
-  const floatData = new Float32Array(planeSize * 3);
   const pixels = imageData.data;
+  const planeSize = size * size;
 
   for (let index = 0; index < planeSize; index += 1) {
     const pixelOffset = index * 4;
 
-    floatData[index] = pixels[pixelOffset] / 255;
-    floatData[planeSize + index] = pixels[pixelOffset + 1] / 255;
-    floatData[(planeSize * 2) + index] = pixels[pixelOffset + 2] / 255;
+    inputBuffer[index] = pixels[pixelOffset] / 255;
+    inputBuffer[planeSize + index] = pixels[pixelOffset + 1] / 255;
+    inputBuffer[(planeSize * 2) + index] = pixels[pixelOffset + 2] / 255;
   }
 
   return {
-    tensor: new self.ort.Tensor("float32", floatData, [1, 3, size, size]),
+    tensor: new self.ort.Tensor("float32", inputBuffer, [1, 3, size, size]),
     scale,
     padX,
     padY,
-    frameWidth: sourceWidth,
-    frameHeight: sourceHeight,
+    frameWidth,
+    frameHeight,
   };
 }
 
-function intersectionOverUnion(left, right) {
+function describeOutput(outputTensor) {
+  const dims = outputTensor.dims || [];
+  const classCount = state.labels.length;
+  let channelCount = 0;
+  let boxCount = 0;
+  let channelsFirst = true;
+
+  const validChannelCount = (value) =>
+    value === classCount + 4 || value === classCount + 5;
+
+  if (dims.length === 3) {
+    if (validChannelCount(dims[1])) {
+      channelCount = dims[1];
+      boxCount = dims[2];
+    } else if (validChannelCount(dims[2])) {
+      channelCount = dims[2];
+      boxCount = dims[1];
+      channelsFirst = false;
+    }
+  } else if (dims.length === 2) {
+    if (validChannelCount(dims[0])) {
+      channelCount = dims[0];
+      boxCount = dims[1];
+    } else if (validChannelCount(dims[1])) {
+      channelCount = dims[1];
+      boxCount = dims[0];
+      channelsFirst = false;
+    }
+  }
+
+  if (!channelCount || !boxCount) {
+    throw new Error(`Unsupported output shape: ${dims.join(" x ")}`);
+  }
+
+  return {
+    dims: [...dims],
+    data: outputTensor.data,
+    classCount,
+    channelCount,
+    boxCount,
+    channelsFirst,
+    hasObjectness: channelCount === classCount + 5,
+  };
+}
+
+function outputValue(layout, channel, boxIndex) {
+  if (layout.channelsFirst) {
+    return layout.data[(channel * layout.boxCount) + boxIndex];
+  }
+
+  return layout.data[(boxIndex * layout.channelCount) + channel];
+}
+
+function normalizeThresholds(thresholds = {}) {
+  return {
+    confidence: clamp(
+      Number.isFinite(thresholds.confidence) ? thresholds.confidence : 0.25,
+      0.01,
+      1,
+    ),
+    iou: clamp(Number.isFinite(thresholds.iou) ? thresholds.iou : 0.70, 0.01, 1),
+  };
+}
+
+function iou(left, right) {
   const x1 = Math.max(left.x, right.x);
   const y1 = Math.max(left.y, right.y);
   const x2 = Math.min(left.x + left.width, right.x + right.width);
@@ -484,44 +438,42 @@ function intersectionOverUnion(left, right) {
 
   const intersectionWidth = Math.max(0, x2 - x1);
   const intersectionHeight = Math.max(0, y2 - y1);
-  const intersectionArea = intersectionWidth * intersectionHeight;
+  const intersection = intersectionWidth * intersectionHeight;
+  const union =
+    (left.width * left.height) +
+    (right.width * right.height) -
+    intersection;
 
-  const leftArea = left.width * left.height;
-  const rightArea = right.width * right.height;
-  const unionArea = leftArea + rightArea - intersectionArea;
-
-  return unionArea > 0 ? intersectionArea / unionArea : 0;
+  return union > 0 ? intersection / union : 0;
 }
 
 function nonMaxSuppression(detections, iouThreshold) {
-  const rankedDetections = [...detections].sort(
+  const ranked = [...detections].sort(
     (left, right) => (right.score || 0) - (left.score || 0),
   );
   const kept = [];
-  const removed = new Uint8Array(rankedDetections.length);
+  const removed = new Uint8Array(ranked.length);
 
-  for (let index = 0; index < rankedDetections.length; index += 1) {
+  for (let index = 0; index < ranked.length; index += 1) {
     if (removed[index]) {
       continue;
     }
 
-    const candidate = rankedDetections[index];
+    const candidate = ranked[index];
     kept.push(candidate);
 
-    for (let compareIndex = index + 1; compareIndex < rankedDetections.length; compareIndex += 1) {
-      if (removed[compareIndex]) {
+    for (let otherIndex = index + 1; otherIndex < ranked.length; otherIndex += 1) {
+      const other = ranked[otherIndex];
+
+      if (
+        removed[otherIndex] ||
+        candidate.classId !== other.classId ||
+        iou(candidate, other) <= iouThreshold
+      ) {
         continue;
       }
 
-      const other = rankedDetections[compareIndex];
-
-      if (candidate.classId !== other.classId) {
-        continue;
-      }
-
-      if (intersectionOverUnion(candidate, other) > iouThreshold) {
-        removed[compareIndex] = 1;
-      }
+      removed[otherIndex] = 1;
     }
   }
 
@@ -529,10 +481,10 @@ function nonMaxSuppression(detections, iouThreshold) {
 }
 
 function decodeBox(layout, boxIndex, transform) {
-  const cx = valueAtOutput(layout, 0, boxIndex);
-  const cy = valueAtOutput(layout, 1, boxIndex);
-  const width = valueAtOutput(layout, 2, boxIndex);
-  const height = valueAtOutput(layout, 3, boxIndex);
+  const cx = outputValue(layout, 0, boxIndex);
+  const cy = outputValue(layout, 1, boxIndex);
+  const width = outputValue(layout, 2, boxIndex);
+  const height = outputValue(layout, 3, boxIndex);
 
   const left = clamp(
     (cx - (width / 2) - transform.padX) / transform.scale,
@@ -563,36 +515,37 @@ function decodeBox(layout, boxIndex, transform) {
   };
 }
 
-function normalizeThresholds(thresholds = {}) {
-  return {
-    confidence: clamp(
-      Number.isFinite(thresholds.confidence) ? thresholds.confidence : 0.25,
-      0.01,
-      1,
-    ),
-    iou: clamp(Number.isFinite(thresholds.iou) ? thresholds.iou : 0.70, 0.01, 1),
-  };
-}
+function summarizeScores(layout, boxIndex, classOffset) {
+  let bestClass = -1;
+  let bestClassScore = Number.NEGATIVE_INFINITY;
 
-function summarizeCandidate(candidate) {
+  for (let classIndex = 0; classIndex < layout.classCount; classIndex += 1) {
+    const classScore = clamp(
+      outputValue(layout, classOffset + classIndex, boxIndex),
+      0,
+      1,
+    );
+
+    if (classScore > bestClassScore) {
+      bestClassScore = classScore;
+      bestClass = classIndex;
+    }
+  }
+
+  const objectness = layout.hasObjectness
+    ? clamp(outputValue(layout, 4, boxIndex), 0, 1)
+    : 1;
+
   return {
-    id: candidate.id,
-    label: candidate.label,
-    classId: candidate.classId,
-    score: candidate.score,
-    objectness: candidate.objectness,
-    classScore: candidate.classScore,
-    box: {
-      x1: candidate.x,
-      y1: candidate.y,
-      x2: candidate.x + candidate.width,
-      y2: candidate.y + candidate.height,
-    },
+    bestClass,
+    bestClassScore,
+    objectness,
+    confidence: objectness * bestClassScore,
   };
 }
 
 function decodeOutput(outputTensor, transform, thresholds) {
-  const layout = describeOutputTensor(outputTensor);
+  const layout = describeOutput(outputTensor);
   const classOffset = layout.hasObjectness ? 5 : 4;
   const preNms = [];
 
@@ -612,7 +565,7 @@ function decodeOutput(outputTensor, transform, thresholds) {
 
     preNms.push({
       id: `candidate-${boxIndex}`,
-      label: workerState.labels[bestClass] || `class_${bestClass}`,
+      label: state.labels[bestClass] || `class_${bestClass}`,
       classId: bestClass,
       score: confidence,
       objectness,
@@ -621,36 +574,16 @@ function decodeOutput(outputTensor, transform, thresholds) {
     });
   }
 
-  const preNmsPreview = [...preNms]
-    .sort((left, right) => (right.score || 0) - (left.score || 0))
-    .slice(0, PRE_NMS_PREVIEW_LIMIT);
   const detections = nonMaxSuppression(preNms, thresholds.iou);
-  const keptIds = new Set(detections.map((detection) => detection.id));
 
   return {
     detections,
+    outputDims: layout.dims,
     preNmsCount: preNms.length,
-    preNmsPreview: preNmsPreview.map((candidate) => ({
-      ...summarizeCandidate(candidate),
-      keptAfterNms: keptIds.has(candidate.id),
-    })),
-    outputDims: [...layout.dims],
   };
 }
 
-function buildInferenceResult(decoded, outputTensor, timing) {
-  const previewDetections = decoded.detections.slice(0, 12).map((detection) => ({
-    label: detection.label,
-    classId: detection.classId,
-    score: detection.score,
-    box: {
-      x1: detection.x,
-      y1: detection.y,
-      x2: detection.x + detection.width,
-      y2: detection.y + detection.height,
-    },
-  }));
-
+function buildInferenceResult(decoded, timing) {
   return {
     detections: decoded.detections,
     inferenceMs: timing.inferenceMs,
@@ -658,15 +591,10 @@ function buildInferenceResult(decoded, outputTensor, timing) {
     workerPostprocessMs: timing.postprocessMs,
     totalWorkerMs: timing.preprocessMs + timing.inferenceMs + timing.postprocessMs,
     rawModelOutput: {
-      outputName: workerState.outputName,
-      outputType: outputTensor.type,
-      outputDims: decoded.outputDims,
-      totalValues: outputTensor.data.length,
-      inputSize: workerState.inputSize,
+      inputSize: state.inputSize,
       preNmsCount: decoded.preNmsCount,
       detectionCount: decoded.detections.length,
-      preNmsPreview: decoded.preNmsPreview,
-      previewDetections,
+      outputDims: decoded.outputDims,
     },
   };
 }
@@ -674,7 +602,7 @@ function buildInferenceResult(decoded, outputTensor, timing) {
 async function runInference(payload = {}) {
   await loadModel(payload);
 
-  if (!workerState.session) {
+  if (!state.session) {
     throw new Error("Model is not loaded");
   }
 
@@ -685,21 +613,26 @@ async function runInference(payload = {}) {
   const thresholds = normalizeThresholds(payload.thresholds);
 
   const preprocessStarted = performance.now();
-  const prepared = prepareInputTensor(payload.imageBitmap);
+  const prepared = prepareInput(payload.imageBitmap);
   const preprocessMs = performance.now() - preprocessStarted;
 
   const inferenceStarted = performance.now();
-  const outputs = await workerState.session.run({
-    [workerState.inputName]: prepared.tensor,
+  const outputs = await state.session.run({
+    [state.inputName]: prepared.tensor,
   });
   const inferenceMs = performance.now() - inferenceStarted;
 
+  const outputTensor = outputs[state.outputName] || outputs[Object.keys(outputs)[0]];
+
+  if (!outputTensor) {
+    throw new Error("Model did not return an output tensor");
+  }
+
   const postprocessStarted = performance.now();
-  const outputTensor = outputs[workerState.outputName];
   const decoded = decodeOutput(outputTensor, prepared, thresholds);
   const postprocessMs = performance.now() - postprocessStarted;
 
-  return buildInferenceResult(decoded, outputTensor, {
+  return buildInferenceResult(decoded, {
     preprocessMs,
     inferenceMs,
     postprocessMs,

@@ -13,8 +13,27 @@ import {
 const pendingRequests = new Map();
 const preloadedCardLabels = new Set();
 
-let inferenceWorker = null;
+let worker = null;
 let nextRequestId = 0;
+
+function modelSnapshot() {
+  return {
+    labels: appState.modelLabels,
+    inputSize: appState.modelInputSize,
+  };
+}
+
+function resetModelState() {
+  appState.modelLabels = [];
+  appState.modelInputSize = 0;
+}
+
+function setModelPresentation(text, state) {
+  emitModelPresentationChanged({
+    badgeText: text,
+    badgeState: state,
+  });
+}
 
 function preloadCardAssets(labels) {
   for (const label of labels) {
@@ -30,23 +49,18 @@ function preloadCardAssets(labels) {
   }
 }
 
-function resetModelState() {
-  appState.modelLabels = [];
-  appState.modelInputSize = 0;
-}
-
 function rejectPendingRequests(error) {
-  for (const { reject } of pendingRequests.values()) {
-    reject(error);
+  for (const pending of pendingRequests.values()) {
+    pending.reject(error);
   }
 
   pendingRequests.clear();
 }
 
 function disposeWorker(error = null) {
-  if (inferenceWorker) {
-    inferenceWorker.terminate();
-    inferenceWorker = null;
+  if (worker) {
+    worker.terminate();
+    worker = null;
   }
 
   if (error) {
@@ -77,30 +91,23 @@ function handleWorkerError(event) {
 
   disposeWorker(error);
   resetModelState();
-
-  emitModelPresentationChanged({
-    badgeText: MODEL_BADGE_ERROR_TEXT,
-    badgeState: "error",
-  });
+  setModelPresentation(MODEL_BADGE_ERROR_TEXT, "error");
   emitStatusChanged(`Inference worker failed: ${error.message}`);
 }
 
 function ensureWorker() {
-  if (inferenceWorker) {
-    return inferenceWorker;
+  if (worker) {
+    return worker;
   }
 
-  inferenceWorker = new Worker(
-    new URL("./inference-worker.js", import.meta.url),
-  );
-  inferenceWorker.addEventListener("message", handleWorkerMessage);
-  inferenceWorker.addEventListener("error", handleWorkerError);
-
-  return inferenceWorker;
+  worker = new Worker(new URL("./inference-worker.js", import.meta.url));
+  worker.addEventListener("message", handleWorkerMessage);
+  worker.addEventListener("error", handleWorkerError);
+  return worker;
 }
 
 function requestWorker(type, payload = {}, transfer = []) {
-  const worker = ensureWorker();
+  const activeWorker = ensureWorker();
 
   return new Promise((resolve, reject) => {
     const id = `worker-${nextRequestId += 1}`;
@@ -108,7 +115,7 @@ function requestWorker(type, payload = {}, transfer = []) {
     pendingRequests.set(id, { resolve, reject });
 
     try {
-      worker.postMessage({ id, type, payload }, transfer);
+      activeWorker.postMessage({ id, type, payload }, transfer);
     } catch (error) {
       pendingRequests.delete(id);
       reject(error);
@@ -118,10 +125,7 @@ function requestWorker(type, payload = {}, transfer = []) {
 
 export async function loadModel() {
   if (appState.modelLabels.length && appState.modelInputSize) {
-    return {
-      labels: appState.modelLabels,
-      inputSize: appState.modelInputSize,
-    };
+    return modelSnapshot();
   }
 
   if (appState.modelLoadPromise) {
@@ -129,15 +133,11 @@ export async function loadModel() {
   }
 
   appState.modelLoadPromise = (async () => {
+    emitStatusChanged("Loading ONNX model...");
+    setModelPresentation(MODEL_BADGE_LOADING_TEXT, "loading");
+    resetModelState();
+
     try {
-      emitStatusChanged("Loading ONNX model...");
-      emitModelPresentationChanged({
-        badgeText: MODEL_BADGE_LOADING_TEXT,
-        badgeState: "loading",
-      });
-
-      resetModelState();
-
       const result = await requestWorker("load-model", {
         modelUrl: MODEL_URL,
         modelManifestUrl: MODEL_MANIFEST_URL,
@@ -147,27 +147,17 @@ export async function loadModel() {
       appState.modelInputSize = result.inputSize || 0;
 
       preloadCardAssets(appState.modelLabels);
-
-      emitModelPresentationChanged({
-        badgeText: MODEL_BADGE_LOADED_TEXT,
-        badgeState: "loaded",
-      });
+      setModelPresentation(MODEL_BADGE_LOADED_TEXT, "loaded");
       emitStatusChanged(
         `Model ready: ${appState.modelLabels.length} classes, ${appState.modelInputSize}x${appState.modelInputSize}`,
       );
 
-      return result;
+      return modelSnapshot();
     } catch (error) {
-      // A failed ORT/WASM init poisons the worker runtime. Recreate it on retry.
       disposeWorker();
       resetModelState();
-
-      emitModelPresentationChanged({
-        badgeText: MODEL_BADGE_ERROR_TEXT,
-        badgeState: "error",
-      });
+      setModelPresentation(MODEL_BADGE_ERROR_TEXT, "error");
       emitStatusChanged(`Model load failed: ${error.message}`);
-
       throw error;
     }
   })();
@@ -179,7 +169,7 @@ export async function loadModel() {
   }
 }
 
-export async function runModelInference(imageBitmap, thresholds) {
+export function runModelInference(imageBitmap, thresholds) {
   return requestWorker(
     "run-inference",
     {

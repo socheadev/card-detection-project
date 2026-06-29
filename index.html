@@ -73,14 +73,6 @@
                     <button id="loadStreamBtn" type="button">
                       Load Stream
                     </button>
-
-                    <button id="startDetectBtn" type="button" class="secondary">
-                      Start Detect
-                    </button>
-
-                    <button id="stopDetectBtn" type="button" class="ghost">
-                      Stop Detect
-                    </button>
                   </div>
                 </div>
               </div>
@@ -238,24 +230,6 @@
                   </div>
 
                   <div class="metric metric-primary">
-                    <span class="metric-label"> Detections </span>
-
-                    <strong id="countValue"> 0 </strong>
-                  </div>
-
-                  <div class="metric">
-                    <span class="metric-label"> Inference </span>
-
-                    <strong id="timingText"> -- </strong>
-                  </div>
-
-                  <div class="metric">
-                    <span class="metric-label"> Best Score </span>
-
-                    <strong id="bestScoreValue"> 0.00 </strong>
-                  </div>
-
-                  <div class="metric metric-primary">
                     <span class="metric-label"> Broadcast </span>
 
                     <strong id="broadcastStatusValue"> Disabled </strong>
@@ -276,30 +250,6 @@
                   </div>
 
                   <pre id="rawModelOutput" class="raw-model-output"></pre>
-                </div>
-
-                <div class="raw-model-panel">
-                  <div class="panel-head panel-head-compact">
-                    <h2>RabbitMQ HTTP Viewer</h2>
-                  </div>
-
-                  <div class="metric-grid viewer-metric-grid">
-                    <div class="metric metric-primary">
-                      <span class="metric-label"> Viewer </span>
-
-                      <strong id="rabbitmqViewerStatus" data-state="idle">
-                        Waiting for first HTTP publish
-                      </strong>
-                    </div>
-
-                    <div class="metric">
-                      <span class="metric-label"> Total Published </span>
-
-                      <strong id="rabbitmqViewerCount"> 0 </strong>
-                    </div>
-                  </div>
-
-                  <pre id="rabbitmqViewerOutput" class="raw-model-output"></pre>
                 </div>
               </div>
             </div>

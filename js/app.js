@@ -26,7 +26,6 @@ import {
   initBroadcasting,
   setRabbitMqConfig,
   startBroadcasting,
-  stopBroadcasting,
   setBroadcastTargetUrl,
   toggleBroadcasting,
 } from "./broadcast.js";
@@ -44,15 +43,9 @@ import {
 } from "./stream.js";
 
 const COPY_BUTTON_RESET_MS = 1400;
-const RABBITMQ_VIEWER_POLL_MS = 1000;
-const RABBITMQ_VIEWER_IDLE_TEXT = "Waiting for first HTTP publish";
-const RABBITMQ_VIEWER_EMPTY_OUTPUT = "";
 
 let copyButtonResetTimer = 0;
 let resizeObserver = null;
-let detectRequestId = 0;
-let rabbitMqViewerPollTimer = 0;
-let rabbitMqViewerRequestInFlight = false;
 
 function setElementState(element, stateName) {
   if (element) {
@@ -82,6 +75,14 @@ function renderDetectionUi() {
   renderRuntimeSummary(runtimeView);
 }
 
+async function startAutoDetection() {
+  if (hasBroadcastDestination()) {
+    startBroadcasting();
+  }
+
+  await startDetection();
+}
+
 async function reload(loadFn, value) {
   if (appState.loadingStream) {
     return false;
@@ -89,12 +90,21 @@ async function reload(loadFn, value) {
 
   stopDetection();
   appState.loadingStream = true;
+  appState.preparingDetection = true;
   syncDetectionControls();
 
   try {
-    return await loadFn(value);
+    const loaded = await loadFn(value);
+
+    if (!loaded) {
+      return false;
+    }
+
+    await startAutoDetection();
+    return true;
   } finally {
     appState.loadingStream = false;
+    appState.preparingDetection = false;
     syncDetectionControls();
   }
 }
@@ -103,28 +113,9 @@ function syncDetectionControls() {
   if (els.loadStreamBtn) {
     els.loadStreamBtn.disabled =
       appState.loadingStream || appState.preparingDetection || appState.startingDetection;
-    els.loadStreamBtn.textContent = appState.loadingStream
+    els.loadStreamBtn.textContent = appState.loadingStream || appState.startingDetection
       ? "Loading..."
       : "Load Stream";
-  }
-
-  if (els.startDetectBtn) {
-    els.startDetectBtn.disabled =
-      appState.loadingStream ||
-      appState.preparingDetection ||
-      appState.detecting ||
-      appState.startingDetection;
-    els.startDetectBtn.textContent =
-      appState.preparingDetection || appState.startingDetection
-        ? "Starting..."
-        : appState.streamReady
-          ? "Start Detect"
-          : "Load + Detect";
-  }
-
-  if (els.stopDetectBtn) {
-    els.stopDetectBtn.disabled =
-      !appState.preparingDetection && !appState.detecting && !appState.startingDetection;
   }
 }
 
@@ -135,20 +126,6 @@ function syncBroadcastControls() {
       : "Start Broadcast";
     els.toggleBroadcastBtn.dataset.state = appState.broadcastEnabled ? "ready" : "idle";
   }
-}
-
-async function ensureStreamReadyForDetection() {
-  if (appState.streamReady) {
-    return true;
-  }
-
-  if (!els.sourceInput?.value?.trim()) {
-    emitStatusChanged("Enter a stream URL first");
-    return false;
-  }
-
-  emitStatusChanged("Loading stream before detection...");
-  return reload(loadStreamFromInput);
 }
 
 async function writeTextToClipboard(text) {
@@ -211,77 +188,6 @@ async function copyRawModelOutput() {
   scheduleCopyButtonReset();
 }
 
-function setRabbitMqViewerStatus(text, state = "idle") {
-  if (!els.rabbitmqViewerStatus) {
-    return;
-  }
-
-  els.rabbitmqViewerStatus.textContent = text;
-  els.rabbitmqViewerStatus.dataset.state = state;
-}
-
-function renderRabbitMqViewer(snapshot = {}) {
-  if (els.rabbitmqViewerCount) {
-    els.rabbitmqViewerCount.textContent = String(snapshot.totalPublished || 0);
-  }
-
-  if (els.rabbitmqViewerOutput) {
-    els.rabbitmqViewerOutput.textContent = snapshot.payload
-      ? JSON.stringify(snapshot.payload, null, 2)
-      : RABBITMQ_VIEWER_EMPTY_OUTPUT;
-  }
-
-  if (snapshot.lastError) {
-    setRabbitMqViewerStatus(`Publish error: ${snapshot.lastError}`, "error");
-    return;
-  }
-
-  if (snapshot.publishedAt) {
-    const publishedAt = new Date(snapshot.publishedAt);
-    const publishedText = Number.isNaN(publishedAt.getTime())
-      ? snapshot.publishedAt
-      : publishedAt.toLocaleTimeString();
-
-    setRabbitMqViewerStatus(`Live: ${publishedText}`, "ready");
-    return;
-  }
-
-  setRabbitMqViewerStatus(RABBITMQ_VIEWER_IDLE_TEXT, "idle");
-}
-
-async function refreshRabbitMqViewer() {
-  if (rabbitMqViewerRequestInFlight) {
-    return;
-  }
-
-  rabbitMqViewerRequestInFlight = true;
-
-  try {
-    const response = await fetch("/broadcast/rabbitmq/latest", {
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    const snapshot = await response.json();
-    renderRabbitMqViewer(snapshot);
-  } catch (error) {
-    setRabbitMqViewerStatus(`Viewer unavailable: ${error.message}`, "error");
-  } finally {
-    rabbitMqViewerRequestInFlight = false;
-  }
-}
-
-function startRabbitMqViewerPolling() {
-  window.clearInterval(rabbitMqViewerPollTimer);
-  rabbitMqViewerPollTimer = window.setInterval(() => {
-    void refreshRabbitMqViewer();
-  }, RABBITMQ_VIEWER_POLL_MS);
-  void refreshRabbitMqViewer();
-}
-
 function redrawStage() {
   resizeOverlay();
   drawOverlay();
@@ -291,52 +197,6 @@ function redrawStage() {
 function bindEvents() {
   els.loadStreamBtn?.addEventListener("click", () => {
     reload(loadStreamFromInput);
-  });
-
-  els.startDetectBtn?.addEventListener("click", async () => {
-    if (appState.preparingDetection || appState.detecting || appState.startingDetection) {
-      syncDetectionControls();
-      return;
-    }
-
-    const requestId = ++detectRequestId;
-    appState.preparingDetection = true;
-    syncDetectionControls();
-
-    try {
-      const streamReady = await ensureStreamReadyForDetection();
-
-      if (requestId !== detectRequestId || !appState.preparingDetection) {
-        return;
-      }
-
-      if (!streamReady) {
-        return;
-      }
-
-      if (hasBroadcastDestination()) {
-        startBroadcasting();
-      }
-
-      appState.preparingDetection = false;
-      await startDetection();
-    } finally {
-      if (requestId === detectRequestId) {
-        appState.preparingDetection = false;
-      }
-      syncDetectionControls();
-    }
-  });
-  els.stopDetectBtn?.addEventListener("click", () => {
-    detectRequestId += 1;
-    appState.preparingDetection = false;
-    stopDetection();
-    if (appState.broadcastEnabled) {
-      stopBroadcasting();
-    }
-    emitStatusChanged("Detection stopped");
-    syncBroadcastControls();
-    syncDetectionControls();
   });
   els.toggleBroadcastBtn?.addEventListener("click", () => {
     toggleBroadcasting();
@@ -465,9 +325,6 @@ function applyDefaults() {
       els.broadcastStatusValue.textContent = BROADCAST_STATUS_IDLE_TEXT;
     }
   }
-
-  renderRabbitMqViewer();
-
   if (els.rawModelOutput) {
     els.rawModelOutput.textContent = RAW_MODEL_OUTPUT_IDLE_TEXT;
   }
@@ -479,7 +336,6 @@ function applyDefaults() {
 function bindLifecycle() {
   window.addEventListener("beforeunload", () => {
     stopDetection();
-    window.clearInterval(rabbitMqViewerPollTimer);
 
     if (resizeObserver) {
       resizeObserver.disconnect();
@@ -495,7 +351,6 @@ async function init() {
   bindLifecycle();
   initRoiEditor();
   renderDetectionUi();
-  startRabbitMqViewerPolling();
   redrawStage();
 
   if (AUTO_LOAD_STREAM && els.sourceInput?.value?.trim()) {

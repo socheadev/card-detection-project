@@ -7,9 +7,9 @@ import {
   overlayCtx,
   ROI_ORDER,
   ROI_SIDE,
+  roiSlotValue,
   runtimeView,
   SIDE_ORDER,
-  TIMING_IDLE_TEXT,
 } from "./shared.js";
 
 let cardsMarkupKey = "";
@@ -70,16 +70,77 @@ function formatDetection(detection) {
   };
 }
 
+export function formatCardGroupsForDisplay(payload) {
+  const grouped = {
+    player: [],
+    banker: [],
+  };
+
+  for (const side of ["player", "banker"]) {
+    const items = Array.isArray(payload?.[side]) ? payload[side] : [];
+
+    for (const item of items) {
+      grouped[side].push({
+        name: item?.name || "",
+        slot: Number.isFinite(item?.slot) ? item.slot : null,
+      });
+    }
+  }
+
+  const compareCards = (left, right) => {
+    const leftSlot = Number.isFinite(left?.slot) ? left.slot : Number.MAX_SAFE_INTEGER;
+    const rightSlot = Number.isFinite(right?.slot) ? right.slot : Number.MAX_SAFE_INTEGER;
+
+    if (leftSlot !== rightSlot) {
+      return leftSlot - rightSlot;
+    }
+    
+    return 0;
+  };
+
+  grouped.player.sort(compareCards);
+  grouped.banker.sort(compareCards);
+
+  return JSON.stringify(
+    {
+      player: grouped.player,
+      banker: grouped.banker,
+    },
+    null,
+    2,
+  );
+}
+
 function formatRawModelOutput(runtimeView) {
   if (!runtimeView.rawModelOutput) {
     return "";
   }
 
-  return JSON.stringify(runtimeView.rawModelOutput, null, 2);
+  const payload = {
+    player: [],
+    banker: [],
+  };
+
+  for (const detection of runtimeView.displayedDetections || []) {
+    const side = String(detection?.side || "").toUpperCase();
+    const entry = {
+      name: detection.label,
+      confidence: detection.score,
+      slot: detection.roi ? roiSlotValue(detection.roi) : null,
+    };
+
+    if (side === "PLAYER") {
+      payload.player.push(entry);
+    } else if (side === "BANKER") {
+      payload.banker.push(entry);
+    }
+  }
+
+  return formatCardGroupsForDisplay(payload);
 }
 
 function drawRawDetectionBoxes(frameRect) {
-  for (const detection of runtimeView.rawDetections) {
+  for (const detection of runtimeView.displayedDetections) {
     const rectX = frameRect.x + detection.x * frameRect.scale;
     const rectY = frameRect.y + detection.y * frameRect.scale;
     const rectWidth = detection.width * frameRect.scale;
@@ -197,25 +258,7 @@ export function drawOverlay() {
 }
 
 export function renderRuntimeSummary(runtimeView) {
-  const bestScore = runtimeView.displayedDetections.reduce(
-    (highestScore, detection) => Math.max(highestScore, detection.score || 0),
-    0,
-  );
-
-  if (els.countValue) {
-    els.countValue.textContent = String(runtimeView.displayedDetections.length);
-  }
-
-  if (els.bestScoreValue) {
-    els.bestScoreValue.textContent = bestScore.toFixed(2);
-  }
-
-  if (els.timingText) {
-    els.timingText.textContent =
-      runtimeView.lastTotalMs > 0
-        ? `Total ${runtimeView.lastTotalMs.toFixed(1)} ms | Model ${runtimeView.lastInferenceMs.toFixed(1)} ms | Post ${runtimeView.lastPostprocessMs.toFixed(1)} ms | UI ${runtimeView.lastUiRenderMs.toFixed(1)} ms`
-        : TIMING_IDLE_TEXT;
-  }
+  void runtimeView;
 }
 
 export function renderRawModelOutput(runtimeView) {
@@ -260,7 +303,7 @@ export function renderCardsOverlay(displayedDetections) {
   const grouped = groupDetectionsBySide(validDetections);
   const nextKey = cardsOverlayKey(grouped);
 
-  if (cardsMarkupKey !== nextKey) {
+  if (cardsMarkupKey !== nextKey || !els.cardsOverlay.innerHTML.trim()) {
     els.cardsOverlay.innerHTML = SIDE_ORDER.map((side) => `
       <section class="cards-side cards-side-${side.toLowerCase()}">
         <div class="cards-hand cards-hand-${side.toLowerCase()}" data-roi="${side}">
