@@ -146,8 +146,28 @@ async function postBroadcastPayload(payload) {
   }
 }
 
+async function postLocalBroadcastClear() {
+  const response = await fetch("/broadcast/rabbitmq/clear-local", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ clear: true }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    const detail = errorText ? `: ${errorText}` : "";
+    throw new Error(`HTTP ${response.status}${detail}`);
+  }
+}
+
 function broadcastPayloadKey(payload) {
   try {
+    if (payload && typeof payload === "object" && "payload" in payload) {
+      return JSON.stringify(payload.payload);
+    }
+
     return JSON.stringify(payload);
   } catch {
     return "";
@@ -210,10 +230,10 @@ export function initBroadcasting() {
     storedConfig?.rabbitmqExchange || DEFAULT_RABBITMQ_EXCHANGE;
   appState.rabbitmqRoutingKey =
     storedConfig?.rabbitmqRoutingKey || DEFAULT_RABBITMQ_ROUTING_KEY;
-  appState.broadcastEnabled = hasBroadcastDestination();
+  appState.broadcastEnabled = false;
 
-  if (appState.broadcastEnabled) {
-    emitBroadcastStatus(`Enabled: ${currentDestinationSummary()}`, "ready");
+  if (hasBroadcastDestination()) {
+    emitBroadcastStatus(`Ready: ${currentDestinationSummary()}`, "idle");
     return;
   }
 
@@ -233,4 +253,41 @@ export function queueBroadcastPayload(payload) {
 
   broadcasterState.pendingPayload = payload;
   void flushBroadcastQueue();
+}
+
+export function clearLocalBroadcastPayload() {
+  broadcasterState.pendingPayload = null;
+  broadcasterState.lastSentKey = "";
+
+  if (!hasBroadcastDestination()) {
+    return;
+  }
+
+  void postLocalBroadcastClear().catch(() => {
+    // Ignore local clear failures. They do not affect on-screen detection.
+  });
+}
+
+export function startBroadcasting() {
+  if (!hasBroadcastDestination()) {
+    appState.broadcastEnabled = false;
+    emitBroadcastStatus("Disabled", "idle");
+    return false;
+  }
+
+  appState.broadcastEnabled = true;
+  emitBroadcastStatus(`Broadcasting: ${currentDestinationSummary()}`, "ready");
+  return true;
+}
+
+export function stopBroadcasting() {
+  disableBroadcastingState();
+  broadcasterState.lastSentKey = "";
+
+  if (hasBroadcastDestination()) {
+    emitBroadcastStatus(`Ready: ${currentDestinationSummary()}`, "idle");
+    return;
+  }
+
+  emitBroadcastStatus("Disabled", "idle");
 }

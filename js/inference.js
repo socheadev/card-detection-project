@@ -12,7 +12,10 @@ import {
   roiSlotValue,
   resetRuntimeView,
 } from "./shared.js";
-import { queueBroadcastPayload } from "./broadcast.js";
+import {
+  clearLocalBroadcastPayload,
+  queueBroadcastPayload,
+} from "./broadcast.js";
 import { loadModel, runModelInference } from "./model.js";
 
 const DISPLAY_CONFIRM_FRAMES = 1;
@@ -265,6 +268,16 @@ function nextDisplayedDetections(frameDetections) {
     }
 
     nextState.set(roi, state);
+  }
+
+  if (resetTriggered) {
+    // Treat a reset as the end of the whole visible hand, not a per-slot fade-out.
+    clearDisplayedState();
+
+    return {
+      displayedDetections: [],
+      resetTriggered: true,
+    };
   }
 
   displayedByRoi = nextState;
@@ -529,6 +542,7 @@ export function applyExternalDetections(payload = {}) {
   );
 
   if (resetTriggered) {
+    clearLocalBroadcastPayload();
     emitStatusChanged("Display reset. Detection still running");
   }
 
@@ -620,6 +634,7 @@ async function runInferenceFrame(sessionId) {
   );
 
   if (resetTriggered) {
+    clearLocalBroadcastPayload();
     emitStatusChanged("Display reset. Detection still running");
   }
 

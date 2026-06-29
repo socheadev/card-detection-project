@@ -73,6 +73,14 @@
                     <button id="loadStreamBtn" type="button">
                       Load Stream
                     </button>
+
+                    <button id="startBtn" type="button">
+                      Start
+                    </button>
+
+                    <button id="stopBtn" type="button">
+                      Stop
+                    </button>
                   </div>
                 </div>
               </div>
@@ -205,13 +213,13 @@
                     </div>
 
                     <div class="metric metric-primary model-metric-card">
-                      <span class="metric-label"> Auto Broadcast </span>
+                      <span class="metric-label"> Broadcast State </span>
 
                       <strong id="broadcastStatusValue"> Disabled </strong>
 
                       <p class="metric-note">
-                        Detection results publish automatically whenever a valid model
-                        payload is available.
+                        Broadcast starts with manual detection start and stops when
+                        detection stops.
                       </p>
                     </div>
                   </div>

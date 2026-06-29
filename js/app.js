@@ -19,8 +19,11 @@ import {
   runtimeView,
 } from "./shared.js";
 import {
+  clearLocalBroadcastPayload,
   hasBroadcastDestination,
   initBroadcasting,
+  startBroadcasting,
+  stopBroadcasting,
 } from "./broadcast.js";
 import {
   applyExternalDetections,
@@ -76,20 +79,14 @@ function renderDetectionUi() {
   renderRuntimeSummary(runtimeView);
 }
 
-async function startAutoDetection() {
-  if (appState.streamMode === "iframe") {
-    return;
-  }
-
-  await startDetection();
-}
-
 async function reload(loadFn, value) {
   if (appState.loadingStream) {
     return false;
   }
 
   stopDetection();
+  stopBroadcasting();
+  clearLocalBroadcastPayload();
   appState.loadingStream = true;
   appState.preparingDetection = true;
   syncDetectionControls();
@@ -101,7 +98,12 @@ async function reload(loadFn, value) {
       return false;
     }
 
-    await startAutoDetection();
+    if (appState.streamMode === "iframe") {
+      emitStatusChanged("Remote player loaded. Press Start to receive detector results.");
+    } else {
+      emitStatusChanged("Stream loaded. Press Start to begin detection.");
+    }
+
     return true;
   } finally {
     appState.loadingStream = false;
@@ -117,6 +119,24 @@ function syncDetectionControls() {
     els.loadStreamBtn.textContent = appState.loadingStream || appState.startingDetection
       ? "Loading..."
       : "Load Stream";
+  }
+
+  if (els.startBtn) {
+    const canStart =
+      appState.streamReady &&
+      !appState.loadingStream &&
+      !appState.preparingDetection &&
+      !appState.startingDetection &&
+      !appState.detecting;
+    els.startBtn.disabled = !canStart;
+    els.startBtn.classList.toggle("is-ready", canStart);
+    els.startBtn.classList.toggle("is-running", appState.detecting);
+  }
+
+  if (els.stopBtn) {
+    const canStop = appState.detecting || appState.startingDetection;
+    els.stopBtn.disabled = !canStop;
+    els.stopBtn.classList.toggle("is-ready", canStop);
   }
 }
 
@@ -194,6 +214,10 @@ async function pollDetectorResults() {
     return;
   }
 
+  if (!appState.detecting) {
+    return;
+  }
+
   try {
     const response = await fetch("/detector/latest", {
       cache: "no-store",
@@ -220,10 +244,50 @@ async function pollDetectorResults() {
   }
 }
 
+async function handleStartClick() {
+  if (appState.streamMode === "iframe") {
+    appState.detecting = true;
+    appState.startingDetection = false;
+    lastDetectorUpdatedAt = "";
+    emitStatusChanged("Waiting for detector results...");
+
+    if (hasBroadcastDestination()) {
+      startBroadcasting();
+    }
+
+    syncDetectionControls();
+    return;
+  }
+
+  await startDetection();
+
+  if (appState.detecting && hasBroadcastDestination()) {
+    startBroadcasting();
+  }
+
+  syncDetectionControls();
+}
+
+function handleStopClick() {
+  stopDetection();
+  stopBroadcasting();
+  clearLocalBroadcastPayload();
+
+  if (appState.streamReady) {
+    emitStatusChanged("Detection stopped. Press Start to run again.");
+  } else {
+    emitStatusChanged(STATUS_WAITING_FOR_STREAM_TEXT);
+  }
+
+  syncDetectionControls();
+}
+
 function bindEvents() {
   els.loadStreamBtn?.addEventListener("click", () => {
     reload(loadStreamFromInput);
   });
+  els.startBtn?.addEventListener("click", handleStartClick);
+  els.stopBtn?.addEventListener("click", handleStopClick);
   els.copyRawModelBtn?.addEventListener("click", copyRawModelOutput);
 
   els.sourceInput?.addEventListener("keydown", (event) => {
@@ -326,6 +390,8 @@ function bindLifecycle() {
 
   window.addEventListener("beforeunload", () => {
     stopDetection();
+    stopBroadcasting();
+    clearLocalBroadcastPayload();
 
     if (detectorPollTimer) {
       window.clearInterval(detectorPollTimer);

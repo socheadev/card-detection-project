@@ -306,6 +306,7 @@ export async function loadStreamFromInput() {
 
     try {
       await waitForFrameLoad(els.remoteFrame, requestedSource);
+      appState.streamReady = true;
       emitRuntimeViewChanged();
       emitOverlayInvalidated();
       emitStatusChanged(

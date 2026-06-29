@@ -5,7 +5,7 @@ export const DEFAULT_IOU = 0.70;
 export const DEFAULT_INTERVAL_MS = 100;
 export const DEFAULT_DETECT_EVERY_NTH_FRAME = 1;
 export const AUTO_LOAD_STREAM = false;
-export const CARD_REVEAL_SCORE = 0.80;
+export const CARD_REVEAL_SCORE = 0.85;
 export const DEFAULT_RABBITMQ_URL = "";
 export const DEFAULT_RABBITMQ_VHOST = "/";
 export const DEFAULT_RABBITMQ_EXCHANGE = "amq.direct";
@@ -230,6 +230,8 @@ export let ROI_SLOT_CONFIG =
 export const els = {
   sourceInput: document.querySelector("#sourceInput"),
   loadStreamBtn: document.querySelector("#loadStreamBtn"),
+  startBtn: document.querySelector("#startBtn"),
+  stopBtn: document.querySelector("#stopBtn"),
   toggleRoiEditorBtn: document.querySelector("#toggleRoiEditorBtn"),
   loadRoiEditorBtn: document.querySelector("#loadRoiEditorBtn"),
   saveRoiEditorBtn: document.querySelector("#saveRoiEditorBtn"),

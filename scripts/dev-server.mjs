@@ -847,6 +847,30 @@ async function handleRabbitMqViewer(req, res) {
   sendJson(res, 200, body);
 }
 
+async function handleRabbitMqLocalClear(req, res) {
+  if (req.method === "OPTIONS") {
+    const headers = new Headers();
+    setCorsHeaders(headers);
+    writeHeaders(res, 204, headers);
+    res.end();
+    return;
+  }
+
+  if (req.method !== "POST") {
+    sendText(res, 405, "Method Not Allowed");
+    return;
+  }
+
+  rabbitMqBroadcastState.lastPayload = emptyCardPayload();
+  rabbitMqBroadcastState.retainedPayload = emptyCardPayload();
+  rabbitMqBroadcastState.lastRawModelOutput = null;
+
+  sendJson(res, 200, {
+    ok: true,
+    clearedAt: new Date().toISOString(),
+  });
+}
+
 async function handleLocalBroadcast(req, res, requestUrl) {
   if (req.method === "OPTIONS") {
     const headers = new Headers();
@@ -1039,6 +1063,11 @@ const server = http.createServer(async (req, res) => {
 
   if (requestUrl.pathname === "/broadcast/rabbitmq/latest") {
     await handleRabbitMqViewer(req, res);
+    return;
+  }
+
+  if (requestUrl.pathname === "/broadcast/rabbitmq/clear-local") {
+    await handleRabbitMqLocalClear(req, res);
     return;
   }
 
