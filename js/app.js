@@ -99,9 +99,11 @@ async function reload(loadFn, value) {
     }
 
     if (appState.streamMode === "iframe") {
-      emitStatusChanged("Remote player loaded. Press Start to receive detector results.");
+      emitStatusChanged(
+        "Remote player loaded. Press Start Detection to receive detector results.",
+      );
     } else {
-      emitStatusChanged("Stream loaded. Press Start to begin detection.");
+      emitStatusChanged("Stream loaded. Press Start Detection to begin detection.");
     }
 
     return true;
@@ -274,7 +276,7 @@ function handleStopClick() {
   clearLocalBroadcastPayload();
 
   if (appState.streamReady) {
-    emitStatusChanged("Detection stopped. Press Start to run again.");
+    emitStatusChanged("Detection stopped. Press Start Detection to run again.");
   } else {
     emitStatusChanged(STATUS_WAITING_FOR_STREAM_TEXT);
   }
