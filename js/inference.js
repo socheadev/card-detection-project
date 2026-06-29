@@ -326,8 +326,44 @@ function buildBroadcastPayload(detections) {
   return payload;
 }
 
+function buildBroadcastResults(detections) {
+  return detections.map((detection) => ({
+    name: detection.label,
+    class: detection.classId,
+    confidence: detection.score,
+    side: detection.side || null,
+    slot: detection.roi ? roiSlotValue(detection.roi) : null,
+    roi: detection.roi || null,
+  }));
+}
+
 function hasPayloadCards(payload) {
   return payload.player.length > 0 || payload.banker.length > 0;
+}
+
+function buildBroadcastMessage({
+  displayedDetections,
+  rawModelOutput,
+  lastInferenceMs = 0,
+  lastPostprocessMs = 0,
+  lastTotalMs = 0,
+  debugText = "",
+}) {
+  const payload = buildBroadcastPayload(displayedDetections);
+
+  return {
+    payload,
+    rawModelOutput: {
+      ...(rawModelOutput || {}),
+      results: buildBroadcastResults(displayedDetections),
+      player: payload.player,
+      banker: payload.banker,
+      lastInferenceMs,
+      lastPostprocessMs,
+      lastTotalMs,
+      debugText,
+    },
+  };
 }
 
 async function captureFrameBitmap(cropBounds = null) {
@@ -402,10 +438,37 @@ export function applyExternalDetections(payload = {}) {
   );
   const { displayedDetections, resetTriggered } =
     nextDisplayedDetections(matchedDetections);
-  const broadcastPayload = buildBroadcastPayload(displayedDetections);
+  const nextRawModelOutput = {
+    ...(payload.rawModelOutput || {}),
+    inferenceMode: "puppeteer-screenshot",
+    frame: {
+      width: sourceWidth,
+      height: sourceHeight,
+    },
+    capturedAt: payload.capturedAt || null,
+    roiBounds,
+    rawDetectionCount: rawDetections.length,
+    matchedDetectionCount: matchedDetections.length,
+    unmatchedDetectionCount: unmatchedDetections.length,
+    displayedDetectionCount: displayedDetections.length,
+    rawDetectionsPreview: detectionPreview(rawDetections),
+    displayedDetectionsPreview: detectionPreview(displayedDetections),
+  };
+  const broadcastMessage = buildBroadcastMessage({
+    displayedDetections,
+    rawModelOutput: nextRawModelOutput,
+    lastInferenceMs: Number.isFinite(payload.inferenceMs) ? payload.inferenceMs : 0,
+    lastPostprocessMs: Number.isFinite(payload.postprocessMs) ? payload.postprocessMs : 0,
+    lastTotalMs: Number.isFinite(payload.totalMs) ? payload.totalMs : 0,
+    debugText:
+      `screenshot ${sourceWidth}x${sourceHeight}` +
+      ` raw ${rawDetections.length}` +
+      ` matched ${matchedDetections.length}` +
+      ` displayed ${displayedDetections.length}`,
+  });
 
-  if (hasPayloadCards(broadcastPayload)) {
-    queueBroadcastPayload(broadcastPayload);
+  if (hasPayloadCards(broadcastMessage.payload)) {
+    queueBroadcastPayload(broadcastMessage);
   }
 
   appState.lastRunAt = performance.now();
@@ -415,30 +478,11 @@ export function applyExternalDetections(payload = {}) {
       rawDetections,
       matchedDetections,
       displayedDetections,
-      rawModelOutput: {
-        ...(payload.rawModelOutput || {}),
-        inferenceMode: "puppeteer-screenshot",
-        frame: {
-          width: sourceWidth,
-          height: sourceHeight,
-        },
-        capturedAt: payload.capturedAt || null,
-        roiBounds,
-        rawDetectionCount: rawDetections.length,
-        matchedDetectionCount: matchedDetections.length,
-        unmatchedDetectionCount: unmatchedDetections.length,
-        displayedDetectionCount: displayedDetections.length,
-        rawDetectionsPreview: detectionPreview(rawDetections),
-        displayedDetectionsPreview: detectionPreview(displayedDetections),
-      },
+      rawModelOutput: nextRawModelOutput,
       lastInferenceMs: Number.isFinite(payload.inferenceMs) ? payload.inferenceMs : 0,
       lastPostprocessMs: Number.isFinite(payload.postprocessMs) ? payload.postprocessMs : 0,
       lastTotalMs: Number.isFinite(payload.totalMs) ? payload.totalMs : 0,
-      debugText:
-        `screenshot ${sourceWidth}x${sourceHeight}` +
-        ` raw ${rawDetections.length}` +
-        ` matched ${matchedDetections.length}` +
-        ` displayed ${displayedDetections.length}`,
+      debugText: broadcastMessage.rawModelOutput.debugText,
     }),
   );
 
@@ -487,39 +531,48 @@ async function runInferenceFrame(sessionId) {
   );
   const { displayedDetections, resetTriggered } =
     nextDisplayedDetections(matchedDetections);
-  const broadcastPayload = buildBroadcastPayload(displayedDetections);
+  const nextLastRunAt = performance.now();
+  const nextRawModelOutput = {
+    ...frameResult.rawModelOutput,
+    inferenceMode: "roi-union-crop",
+    roiBounds,
+    detectionCropBounds,
+    rawDetectionCount: frameDetections.length,
+    matchedDetectionCount: matchedDetections.length,
+    unmatchedDetectionCount: unmatchedDetections.length,
+    displayedDetectionCount: displayedDetections.length,
+    rawDetectionsPreview: detectionPreview(frameDetections),
+    displayedDetectionsPreview: detectionPreview(displayedDetections),
+  };
+  const broadcastMessage = buildBroadcastMessage({
+    displayedDetections,
+    rawModelOutput: nextRawModelOutput,
+    lastInferenceMs: frameResult.inferenceMs,
+    lastPostprocessMs: frameResult.workerPostprocessMs,
+    lastTotalMs: nextLastRunAt - startedAt,
+    debugText:
+      `roi-crop ${detectionCropBounds.width}x${detectionCropBounds.height}` +
+      ` raw ${frameDetections.length}` +
+      ` matched ${matchedDetections.length}` +
+      ` displayed ${displayedDetections.length}`,
+  });
 
-  if (hasPayloadCards(broadcastPayload)) {
-    queueBroadcastPayload(broadcastPayload);
+  if (hasPayloadCards(broadcastMessage.payload)) {
+    queueBroadcastPayload(broadcastMessage);
   }
 
-  appState.lastRunAt = performance.now();
+  appState.lastRunAt = nextLastRunAt;
 
   applyRuntimeView(
     buildRuntimeView({
       rawDetections: frameDetections,
       matchedDetections,
       displayedDetections,
-      rawModelOutput: {
-        ...frameResult.rawModelOutput,
-        inferenceMode: "roi-union-crop",
-        roiBounds,
-        detectionCropBounds,
-        rawDetectionCount: frameDetections.length,
-        matchedDetectionCount: matchedDetections.length,
-        unmatchedDetectionCount: unmatchedDetections.length,
-        displayedDetectionCount: displayedDetections.length,
-        rawDetectionsPreview: detectionPreview(frameDetections),
-        displayedDetectionsPreview: detectionPreview(displayedDetections),
-      },
+      rawModelOutput: nextRawModelOutput,
       lastInferenceMs: frameResult.inferenceMs,
       lastPostprocessMs: frameResult.workerPostprocessMs,
-      lastTotalMs: appState.lastRunAt - startedAt,
-      debugText:
-        `roi-crop ${detectionCropBounds.width}x${detectionCropBounds.height}` +
-        ` raw ${frameDetections.length}` +
-        ` matched ${matchedDetections.length}` +
-        ` displayed ${displayedDetections.length}`,
+      lastTotalMs: nextLastRunAt - startedAt,
+      debugText: broadcastMessage.rawModelOutput.debugText,
     }),
   );
 

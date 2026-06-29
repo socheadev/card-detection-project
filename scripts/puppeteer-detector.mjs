@@ -1,18 +1,72 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer";
 import { runDetectorInference } from "./detector-model.mjs";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const projectRoot = path.resolve(__dirname, "..");
+
+function readDotEnv(filePath) {
+  try {
+    const raw = readFileSync(filePath, "utf8");
+    const values = {};
+
+    for (const line of raw.split(/\r?\n/)) {
+      const trimmed = line.trim();
+
+      if (!trimmed || trimmed.startsWith("#")) {
+        continue;
+      }
+
+      const separatorIndex = trimmed.indexOf("=");
+
+      if (separatorIndex <= 0) {
+        continue;
+      }
+
+      const key = trimmed.slice(0, separatorIndex).trim();
+      let value = trimmed.slice(separatorIndex + 1).trim();
+
+      if (
+        (value.startsWith("\"") && value.endsWith("\"")) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+
+      values[key] = value;
+    }
+
+    return values;
+  } catch {
+    return {};
+  }
+}
+
+const dotEnv = readDotEnv(path.resolve(projectRoot, ".env"));
+
+function envValue(name, fallback = "") {
+  return process.env[name] ?? dotEnv[name] ?? fallback;
+}
+
+const DEV_SERVER_HOST = envValue("HOST", "127.0.0.1");
+const DEV_SERVER_PORT = Number.parseInt(envValue("PORT", "5500"), 10);
+const DEFAULT_POST_URL = `http://${DEV_SERVER_HOST}:${DEV_SERVER_PORT}/detector/results`;
+
 const SOURCE_URL =
-  process.env.DETECTOR_SOURCE_URL ||
+  envValue("DETECTOR_SOURCE_URL") ||
   "https://venti.gpc123.com/Aesexy/play.html?id=yangyang";
 const POST_URL =
-  process.env.DETECTOR_POST_URL ||
-  "http://127.0.0.1:5500/detector/results";
-const INTERVAL_MS = Number.parseInt(process.env.DETECTOR_INTERVAL_MS || "500", 10);
-const TIMEOUT_MS = Number.parseInt(process.env.DETECTOR_TIMEOUT_MS || "30000", 10);
-const CONFIDENCE = Number.parseFloat(process.env.DETECTOR_CONFIDENCE || "0.25");
-const IOU = Number.parseFloat(process.env.DETECTOR_IOU || "0.70");
-const VIEWPORT_WIDTH = Number.parseInt(process.env.DETECTOR_VIEWPORT_WIDTH || "1280", 10);
-const VIEWPORT_HEIGHT = Number.parseInt(process.env.DETECTOR_VIEWPORT_HEIGHT || "720", 10);
+  envValue("DETECTOR_POST_URL") ||
+  DEFAULT_POST_URL;
+const INTERVAL_MS = Number.parseInt(envValue("DETECTOR_INTERVAL_MS", "500"), 10);
+const TIMEOUT_MS = Number.parseInt(envValue("DETECTOR_TIMEOUT_MS", "30000"), 10);
+const CONFIDENCE = Number.parseFloat(envValue("DETECTOR_CONFIDENCE", "0.25"));
+const IOU = Number.parseFloat(envValue("DETECTOR_IOU", "0.70"));
+const VIEWPORT_WIDTH = Number.parseInt(envValue("DETECTOR_VIEWPORT_WIDTH", "1280"), 10);
+const VIEWPORT_HEIGHT = Number.parseInt(envValue("DETECTOR_VIEWPORT_HEIGHT", "720"), 10);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -142,7 +196,11 @@ for (;;) {
       rawModelOutput: inference.rawModelOutput,
     });
   } catch (error) {
-    console.error(`[detector] ${error.message}`);
+    const details =
+      error?.cause?.message && error.cause.message !== error.message
+        ? ` (${error.cause.message})`
+        : "";
+    console.error(`[detector] ${error.message}${details}`);
   }
 
   await sleep(INTERVAL_MS);

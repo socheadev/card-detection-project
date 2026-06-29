@@ -52,7 +52,7 @@ function envValue(name, fallback = "") {
   return process.env[name] ?? dotEnv[name] ?? fallback;
 }
 
-const HOST = envValue("HOST", "127.0.0.1");
+const HOST = envValue("HOST", "localhost");
 const PORT = Number(envValue("PORT", 5500));
 const RABBITMQ_URL = envValue("RABBITMQ_URL", "");
 const RABBITMQ_USERNAME = envValue("RABBITMQ_USERNAME", "");
@@ -88,6 +88,8 @@ const localBroadcastState = {
 
 const rabbitMqBroadcastState = {
   lastPayload: null,
+  retainedPayload: null,
+  lastRawModelOutput: null,
   publishedAt: "",
   totalPublished: 0,
   publishUrl: "",
@@ -104,6 +106,71 @@ const detectorState = {
 
 function normalizeTextField(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function emptyCardPayload() {
+  return {
+    player: [],
+    banker: [],
+  };
+}
+
+function normalizeCardEntry(entry) {
+  return {
+    name: typeof entry?.name === "string" ? entry.name : "",
+    slot: Number.isFinite(entry?.slot) ? entry.slot : null,
+  };
+}
+
+function sortCardEntries(entries) {
+  return [...entries].sort((left, right) => {
+    const leftSlot = Number.isFinite(left?.slot) ? left.slot : Number.MAX_SAFE_INTEGER;
+    const rightSlot = Number.isFinite(right?.slot) ? right.slot : Number.MAX_SAFE_INTEGER;
+    return leftSlot - rightSlot;
+  });
+}
+
+function normalizeCardPayload(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const player = Array.isArray(source.player) ? source.player : [];
+  const banker = Array.isArray(source.banker) ? source.banker : [];
+
+  return {
+    player: sortCardEntries(player.map(normalizeCardEntry).filter((entry) => entry.name)),
+    banker: sortCardEntries(banker.map(normalizeCardEntry).filter((entry) => entry.name)),
+  };
+}
+
+function mergeCardPayload(previousPayload, nextPayload) {
+  const previous = normalizeCardPayload(previousPayload);
+  const next = normalizeCardPayload(nextPayload);
+
+  const mergeSide = (previousEntries, nextEntries) => {
+    const bySlot = new Map();
+
+    for (const entry of previousEntries) {
+      if (!Number.isFinite(entry.slot)) {
+        continue;
+      }
+
+      bySlot.set(entry.slot, entry);
+    }
+
+    for (const entry of nextEntries) {
+      if (!Number.isFinite(entry.slot)) {
+        continue;
+      }
+
+      bySlot.set(entry.slot, entry);
+    }
+
+    return sortCardEntries([...bySlot.values()]);
+  };
+
+  return {
+    player: mergeSide(previous.player, next.player),
+    banker: mergeSide(previous.banker, next.banker),
+  };
 }
 
 function setCorsHeaders(headers) {
@@ -428,6 +495,7 @@ async function handleRabbitMqBroadcast(req, res) {
 
   const rabbitmq = parsedBody?.rabbitmq || {};
   const payload = parsedBody?.payload;
+  const rawModelOutput = parsedBody?.rawModelOutput ?? null;
   const baseUrl = normalizeTextField(rabbitmq.url) || RABBITMQ_URL;
   const username = normalizeTextField(rabbitmq.username) || RABBITMQ_USERNAME;
   const password =
@@ -519,7 +587,14 @@ async function handleRabbitMqBroadcast(req, res) {
     return;
   }
 
-  rabbitMqBroadcastState.lastPayload = payload;
+  const normalizedPayload = normalizeCardPayload(payload);
+
+  rabbitMqBroadcastState.lastPayload = normalizedPayload;
+  rabbitMqBroadcastState.retainedPayload = mergeCardPayload(
+    rabbitMqBroadcastState.retainedPayload || emptyCardPayload(),
+    normalizedPayload,
+  );
+  rabbitMqBroadcastState.lastRawModelOutput = rawModelOutput;
   rabbitMqBroadcastState.publishedAt = new Date().toISOString();
   rabbitMqBroadcastState.totalPublished += 1;
   rabbitMqBroadcastState.publishUrl = publishUrl;
@@ -552,15 +627,7 @@ async function handleRabbitMqViewer(req, res) {
     return;
   }
 
-  const body = {
-    ok: true,
-    publishedAt: rabbitMqBroadcastState.publishedAt || null,
-    totalPublished: rabbitMqBroadcastState.totalPublished,
-    publishUrl: rabbitMqBroadcastState.publishUrl || null,
-    routed: rabbitMqBroadcastState.routed,
-    lastError: rabbitMqBroadcastState.lastError || null,
-    payload: rabbitMqBroadcastState.lastPayload,
-  };
+  const body = rabbitMqBroadcastState.retainedPayload || emptyCardPayload();
 
   if (req.method === "HEAD") {
     const headers = new Headers({

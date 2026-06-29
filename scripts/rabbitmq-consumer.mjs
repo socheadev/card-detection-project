@@ -62,27 +62,77 @@ function hostFromRabbitMqUrl(value) {
   }
 }
 
+function normalizeProtocol(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "amqps" ? "amqps" : "amqp";
+}
+
+function maskConnectionUrl(value) {
+  if (!value) {
+    return "";
+  }
+
+  try {
+    const url = new URL(value);
+
+    if (url.password) {
+      url.password = "******";
+    }
+
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
 const RABBITMQ_URL = envValue("RABBITMQ_URL", "");
+const RABBITMQ_AMQP_URL = envValue("RABBITMQ_AMQP_URL", "");
 const RABBITMQ_HOST =
   envValue("RABBITMQ_HOST", "") || hostFromRabbitMqUrl(RABBITMQ_URL) || "rabbitmq.sclabproxserver.qzz.io";
 const RABBITMQ_PORT = Number(envValue("RABBITMQ_PORT", "5672"));
+const RABBITMQ_PROTOCOL = normalizeProtocol(
+  envValue("RABBITMQ_PROTOCOL", RABBITMQ_PORT === 5671 ? "amqps" : "amqp"),
+);
 const RABBITMQ_USERNAME = envValue("RABBITMQ_USERNAME");
 const RABBITMQ_PASSWORD = envValue("RABBITMQ_PASSWORD");
 const RABBITMQ_VHOST = envValue("RABBITMQ_VHOST", "/");
 const RABBITMQ_QUEUE = envValue("RABBITMQ_QUEUE", "card_detection_queue");
 
-if (!RABBITMQ_USERNAME || !RABBITMQ_PASSWORD) {
+if (!RABBITMQ_AMQP_URL && (!RABBITMQ_USERNAME || !RABBITMQ_PASSWORD)) {
   throw new Error("Set RABBITMQ_USERNAME and RABBITMQ_PASSWORD in .env or process env before running the consumer");
 }
 
-const connectionUrl =
-  `amqp://${encodeURIComponent(RABBITMQ_USERNAME)}:` +
+const connectionUrl = RABBITMQ_AMQP_URL || (
+  `${RABBITMQ_PROTOCOL}://${encodeURIComponent(RABBITMQ_USERNAME)}:` +
   `${encodeURIComponent(RABBITMQ_PASSWORD)}@${RABBITMQ_HOST}:` +
-  `${RABBITMQ_PORT}/${encodeURIComponent(RABBITMQ_VHOST)}`;
+  `${RABBITMQ_PORT}/${encodeURIComponent(RABBITMQ_VHOST)}`
+);
 
-console.log(`Connecting to ${RABBITMQ_HOST}:${RABBITMQ_PORT}, queue ${RABBITMQ_QUEUE}`);
+console.log(
+  `Connecting to ${maskConnectionUrl(connectionUrl)}, queue ${RABBITMQ_QUEUE}`,
+);
 
-const connection = await amqp.connect(connectionUrl);
+let connection;
+
+try {
+  connection = await amqp.connect(connectionUrl);
+} catch (error) {
+  const code = error?.code || error?.cause?.code || "";
+
+  if (!RABBITMQ_AMQP_URL && (code === "ETIMEDOUT" || code === "EHOSTUNREACH")) {
+    console.error(
+      [
+        "AMQP connection could not reach the broker.",
+        "The RabbitMQ HTTP publish endpoint may still work on HTTPS while raw AMQP is blocked on this host.",
+        "Set RABBITMQ_AMQP_URL to the broker's real AMQP or AMQPS endpoint, for example:",
+        "RABBITMQ_AMQP_URL=amqps://user:pass@real-broker-host:5671/%2F",
+      ].join("\n"),
+    );
+  }
+
+  throw error;
+}
+
 const channel = await connection.createChannel();
 
 await channel.assertQueue(RABBITMQ_QUEUE, { durable: true });

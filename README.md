@@ -98,15 +98,58 @@ The local server also logs each received payload to the terminal running `npm ru
 
 ## RabbitMQ Broadcast
 
-Use these values with the RabbitMQ setup you already tested:
+This project uses two different RabbitMQ connection styles:
 
-1. Put your RabbitMQ credentials in `.env`:
+- `RABBITMQ_AMQP_URL`: for direct AMQP or AMQPS consumption with `npm run consume:rabbitmq`
+- `RABBITMQ_URL`: for RabbitMQ management HTTP API publish or polling flows
+
+Do not put an `amqp://` or `amqps://` URL into `RABBITMQ_URL`.
+
+### CloudAMQP AMQP Consumer
+
+If you have CloudAMQP connection details like:
+
+- host: `mustang.rmq.cloudamqp.com`
+- vhost: `vyhxfcfd`
+- port: `5671`
+- URL: `amqps://vyhxfcfd:...@mustang.rmq.cloudamqp.com/vyhxfcfd`
+
+then put these values in `.env`:
 
 ```env
-RABBITMQ_URL=https://rabbitmq.sclabproxserver.qzz.io
+RABBITMQ_AMQP_URL=amqps://vyhxfcfd:your_password@mustang.rmq.cloudamqp.com/vyhxfcfd
+RABBITMQ_HOST=mustang.rmq.cloudamqp.com
+RABBITMQ_PORT=5671
+RABBITMQ_PROTOCOL=amqps
+RABBITMQ_USERNAME=vyhxfcfd
+RABBITMQ_PASSWORD=your_password
+RABBITMQ_VHOST=vyhxfcfd
+RABBITMQ_QUEUE=card_detection_queue
+```
+
+Then run:
+
+```bash
+npm run consume:rabbitmq
+```
+
+If the queue is not declared yet in that CloudAMQP vhost, create or bind:
+
+1. Queue: `card_detection_queue`
+2. Exchange: `amq.direct`
+3. Binding key: `card.detection`
+
+### RabbitMQ Broadcast via HTTP API
+
+Use this only when your RabbitMQ provider exposes a management HTTP API base URL.
+
+1. Put your RabbitMQ HTTP API credentials in `.env`:
+
+```env
+RABBITMQ_URL=https://your-management-host
 RABBITMQ_USERNAME=your_user
 RABBITMQ_PASSWORD=your_password
-RABBITMQ_VHOST=/
+RABBITMQ_VHOST=your_vhost
 RABBITMQ_EXCHANGE=amq.direct
 RABBITMQ_ROUTING_KEY=card.detection
 ```
@@ -118,8 +161,8 @@ npm run serve
 ```
 
 3. In the page, use:
-   `RabbitMQ URL`: `https://rabbitmq.sclabproxserver.qzz.io`
-4. `Vhost`: `/`
+   `RabbitMQ URL`: your HTTP management base URL, for example `https://your-management-host`
+4. `Vhost`: your RabbitMQ vhost, for example `vyhxfcfd`
 5. `Exchange`: `amq.direct`
 6. `Routing Key`: `card.detection`
 
@@ -132,7 +175,7 @@ Keep the queue bound like this:
 When detection runs, the local Node server wraps the payload into RabbitMQ's HTTP API publish
 format and sends it to:
 
-`https://rabbitmq.sclabproxserver.qzz.io/api/exchanges/%2F/amq.direct/publish`
+`https://your-management-host/api/exchanges/{vhost}/amq.direct/publish`
 
 ## RabbitMQ Realtime Consumer
 
@@ -145,12 +188,49 @@ npm run consume:rabbitmq
 The consumer reads these env vars:
 
 ```env
-RABBITMQ_HOST=rabbitmq.sclabproxserver.qzz.io
-RABBITMQ_PORT=5672
-RABBITMQ_USERNAME=your_user
+RABBITMQ_AMQP_URL=amqps://vyhxfcfd:your_password@mustang.rmq.cloudamqp.com/vyhxfcfd
+RABBITMQ_HOST=mustang.rmq.cloudamqp.com
+RABBITMQ_PORT=5671
+RABBITMQ_PROTOCOL=amqps
+RABBITMQ_USERNAME=vyhxfcfd
 RABBITMQ_PASSWORD=your_password
-RABBITMQ_VHOST=/
+RABBITMQ_VHOST=vyhxfcfd
 RABBITMQ_QUEUE=card_detection_queue
 ```
 
+`RABBITMQ_AMQP_URL` is preferred when your provider gives you a dedicated AMQP or AMQPS
+endpoint. Use the `HOST`/`PORT`/`USERNAME`/`PASSWORD` fields only when the broker really
+accepts raw AMQP on that host and port.
+
 Each incoming message is printed to the terminal as soon as it arrives.
+
+## RabbitMQ HTTP Consumer Fallback
+
+If the broker's AMQP port is not reachable from your machine but the HTTPS management API works,
+use the HTTP polling consumer instead:
+
+```bash
+npm run consume:rabbitmq:http
+```
+
+The HTTP consumer reads these env vars:
+
+```env
+RABBITMQ_URL=https://your-management-host
+RABBITMQ_USERNAME=your_user
+RABBITMQ_PASSWORD=your_password
+RABBITMQ_VHOST=your_vhost
+RABBITMQ_QUEUE=card_detection_queue
+RABBITMQ_HTTP_POLL_MS=1000
+RABBITMQ_HTTP_BATCH_SIZE=1
+RABBITMQ_HTTP_ACKMODE=ack_requeue_false
+RABBITMQ_HTTP_TRUNCATE=50000
+```
+
+`RABBITMQ_HTTP_ACKMODE` controls whether fetched messages stay in the queue:
+
+- `ack_requeue_false`: consume and remove messages
+- `ack_requeue_true`: inspect messages and put them back in the queue
+
+This fallback uses RabbitMQ's management HTTP API `POST /api/queues/{vhost}/{name}/get`, so it
+is suitable for debugging and low-volume polling rather than high-throughput consumers.

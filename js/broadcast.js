@@ -172,6 +172,11 @@ async function postBroadcastPayload(payload) {
     return;
   }
 
+  const message =
+    payload && typeof payload === "object" && "payload" in payload
+      ? payload
+      : { payload, rawModelOutput: null };
+
   let response;
 
   if (activeBroadcastMode() === "rabbitmq") {
@@ -181,7 +186,8 @@ async function postBroadcastPayload(payload) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        payload,
+        payload: message.payload,
+        rawModelOutput: message.rawModelOutput || null,
         rabbitmq: {
           url: appState.rabbitmqUrl,
           vhost: appState.rabbitmqVhost,
@@ -197,7 +203,7 @@ async function postBroadcastPayload(payload) {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(message.payload),
     });
   }
 
