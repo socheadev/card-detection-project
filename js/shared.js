@@ -6,7 +6,6 @@ export const DEFAULT_INTERVAL_MS = 100;
 export const DEFAULT_DETECT_EVERY_NTH_FRAME = 1;
 export const AUTO_LOAD_STREAM = false;
 export const CARD_REVEAL_SCORE = 0.85;
-export const DEFAULT_RABBITMQ_URL = "";
 export const DEFAULT_RABBITMQ_VHOST = "/";
 export const DEFAULT_RABBITMQ_EXCHANGE = "amq.direct";
 export const DEFAULT_RABBITMQ_ROUTING_KEY = "card.detection";
@@ -322,8 +321,6 @@ export const appState = {
   roiEditorEnabled: false,
   roiInputsCollapsed: true,
   broadcastEnabled: false,
-  broadcastTargetUrl: "",
-  rabbitmqUrl: "",
   rabbitmqVhost: DEFAULT_RABBITMQ_VHOST,
   rabbitmqExchange: DEFAULT_RABBITMQ_EXCHANGE,
   rabbitmqRoutingKey: DEFAULT_RABBITMQ_ROUTING_KEY,

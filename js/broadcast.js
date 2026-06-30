@@ -2,7 +2,6 @@ import {
   appState,
   DEFAULT_RABBITMQ_EXCHANGE,
   DEFAULT_RABBITMQ_ROUTING_KEY,
-  DEFAULT_RABBITMQ_URL,
   DEFAULT_RABBITMQ_VHOST,
   emitBroadcastStateChanged,
 } from "./shared.js";
@@ -33,14 +32,6 @@ function isRabbitMqConfigured() {
 
 export function hasBroadcastDestination() {
   return isRabbitMqConfigured();
-}
-
-function activeBroadcastMode() {
-  if (isRabbitMqConfigured()) {
-    return "rabbitmq";
-  }
-
-  return "";
 }
 
 function persistBroadcastConfig() {
@@ -130,12 +121,11 @@ async function postBroadcastPayload(payload) {
     body: JSON.stringify({
       payload: message.payload,
       rawModelOutput: message.rawModelOutput || null,
-      rabbitmq: {
-        url: appState.rabbitmqUrl,
-        vhost: appState.rabbitmqVhost,
-        exchange: appState.rabbitmqExchange,
-        routingKey: appState.rabbitmqRoutingKey,
-      },
+        rabbitmq: {
+          vhost: appState.rabbitmqVhost,
+          exchange: appState.rabbitmqExchange,
+          routingKey: appState.rabbitmqRoutingKey,
+        },
     }),
   });
 
@@ -216,15 +206,9 @@ function disableBroadcastingState() {
   broadcasterState.pendingPayload = null;
 }
 
-function enableBroadcastingState() {
-  appState.broadcastEnabled = true;
-}
-
 export function initBroadcasting() {
   const storedConfig = readStoredBroadcastConfig();
 
-  appState.broadcastTargetUrl = "";
-  appState.rabbitmqUrl = DEFAULT_RABBITMQ_URL;
   appState.rabbitmqVhost = storedConfig?.rabbitmqVhost || DEFAULT_RABBITMQ_VHOST;
   appState.rabbitmqExchange =
     storedConfig?.rabbitmqExchange || DEFAULT_RABBITMQ_EXCHANGE;

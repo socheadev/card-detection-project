@@ -324,28 +324,6 @@ function normalizeCardPayload(payload) {
   });
 }
 
-function mergeCardPayload(previousPayload, nextPayload) {
-  const previous = normalizeCardPayload(previousPayload);
-  const next = normalizeCardPayload(nextPayload);
-  const merged = new Map();
-
-  for (const entry of previous) {
-    merged.set(`${entry.side}:${entry.number}`, entry);
-  }
-
-  for (const entry of next) {
-    merged.set(`${entry.side}:${entry.number}`, entry);
-  }
-
-  return Array.from(merged.values()).sort((left, right) => {
-    if (left.side !== right.side) {
-      return left.side === "player" ? -1 : 1;
-    }
-
-    return left.number - right.number;
-  });
-}
-
 function setCorsHeaders(headers) {
   headers.set("Access-Control-Allow-Origin", "*");
   headers.set("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
