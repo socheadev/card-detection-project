@@ -7,9 +7,7 @@
     "serve": "node ./scripts/dev-server.mjs",
     "start": "npm run serve",
     "consume:rabbitmq": "node ./scripts/rabbitmq-consumer.mjs",
-    "consume:rabbitmq:http": "node ./scripts/rabbitmq-http-consumer.mjs",
-    "sync-assets": "node ./scripts/sync-assets.mjs",
-    "postinstall": "npm run sync-assets"
+    "consume:rabbitmq:http": "node ./scripts/rabbitmq-http-consumer.mjs"
   },
   "dependencies": {
     "amqplib": "0.10.8",

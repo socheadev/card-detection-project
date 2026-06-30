@@ -1,7 +1,7 @@
 "use strict";
 
 const ORT_WASM_BASE_URL = new URL(
-  "../vendor/onnxruntime-web/",
+  "../node_modules/onnxruntime-web/dist/",
   self.location.href,
 ).toString();
 
